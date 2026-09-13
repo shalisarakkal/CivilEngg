@@ -4,7 +4,7 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project has working Phase 1 through Phase 5 foundations and an initial Phase 6 engineering workspace. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. Phase 6 now archives deleted source files and prevents duplicate revision acceptance. The next slice is admin restore/purge and map/site-model visualization:
+The project has working Phase 0 through Phase 6 foundations. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. Phase 6 includes archive/restore/purge lifecycle controls, revision comparison, elevation statistics, native Circle calculations, and geometry preview. Phase 7 is ready to begin with known gaps limited to browser tests and calculation-result geometry highlighting:
 
 1. Create a project.
 2. Upload a supported file.
@@ -12,6 +12,8 @@ The project has working Phase 1 through Phase 5 foundations and an initial Phase
 4. Process the file and report its status.
 5. Display extracted data.
 6. Process the source into normalized document and geometry data.
+7. Accept the extraction into a site-model revision.
+8. Run deterministic calculations with explicit coordinate/output units.
 
 See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 

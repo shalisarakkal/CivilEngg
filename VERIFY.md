@@ -1,6 +1,6 @@
 # Verification Guide
 
-This guide verifies the current Phase 1 through Phase 5 implementation on Windows using PowerShell and local PostgreSQL/PostGIS.
+This guide verifies the current Phase 0 through Phase 6 implementation on Windows using PowerShell and local PostgreSQL/PostGIS.
 
 ## 1. Open The Project
 
@@ -15,13 +15,13 @@ git status --short --branch
 git log --oneline --max-count=4
 ```
 
-The latest committed checkpoint before the current changes is:
+The latest committed checkpoint is:
 
 ```text
-c29a94b Complete Phase 3 extraction pipeline
+e844f56 Complete Phase 0 through Phase 6 foundations
 ```
 
-The current Phase 4 and Phase 5 changes may be uncommitted until reviewed.
+The repository should be clean before starting Phase 7.
 
 ## 2. Run Automated Checks
 
@@ -43,7 +43,7 @@ Expected results:
 - Next.js production build succeeds
 - Backend tests pass
 
-The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF extraction, site-model geometry, and deterministic calculations.
+The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF extraction, site-model geometry, deterministic calculations, elevation statistics, and archive lifecycle behavior.
 
 ## 3. Verify PostgreSQL/PostGIS
 

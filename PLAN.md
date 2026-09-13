@@ -65,7 +65,7 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 - [x] MVP scope and deferred features are approved
 - [x] Supported input formats and units are documented
 - [x] Accuracy and traceability expectations are documented
-- [ ] A representative sample set of civil files is available for testing
+- [ ] A representative sample set of client-like civil files is available for testing; current tests use sanitized/generated fixtures
 
 ### Phase 1 - Project Scaffolding and Developer Workflow
 
@@ -201,10 +201,10 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 **Exit criteria:**
 
 - [x] A user can upload a file, inspect extracted geometry, and run a calculation from the UI
-- [ ] Selecting a result highlights the relevant geometry or source location where possible
+- [ ] Selecting a calculation result highlights the relevant geometry or source location where possible
 - [x] The UI clearly distinguishes extracted, calculated, and AI-generated information
 - [x] Core screens work at desktop and mobile viewport sizes
-- [ ] Frontend tests cover upload state, calculation state, and error state
+- [ ] Frontend browser tests cover upload state, calculation state, and error state; automated backend coverage is complete
 
 Phase 6 lifecycle additions:
 
