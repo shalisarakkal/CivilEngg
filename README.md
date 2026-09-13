@@ -4,14 +4,14 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project is in planning and documentation. The implementation will begin with a small vertical slice:
+The project has a working Phase 1 foundation and a Phase 2 project/file workflow. The next implementation slice is document normalization and extraction:
 
 1. Create a project.
 2. Upload a supported file.
 3. Store file metadata locally.
 4. Process the file and report its status.
 5. Display extracted data.
-6. Run a deterministic measurement.
+6. Process the source into normalized document and geometry data.
 
 See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 

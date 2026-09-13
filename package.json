@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["frontend"],
   "scripts": {
-    "dev": "npm run dev --workspace frontend",
+    "dev": "cd frontend && next dev",
     "dev:backend": "cd backend && uv run uvicorn --app-dir src civil_engineering.main:app --reload",
     "build": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",

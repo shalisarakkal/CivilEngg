@@ -40,6 +40,39 @@ h2 { font-size: clamp(42px, 7vw, 88px); font-weight: 400; letter-spacing: -0.03e
 h3 { font-size: 28px; font-weight: 400; margin: 42px 0 12px; }
 .card-state { background: transparent; border: 1px solid var(--line); display: inline-block; margin-top: 12px; }
 
+.workspace-grid { border-top: 1px solid var(--line); display: grid; grid-template-columns: 280px 1fr; min-height: 610px; }
+.project-panel { border-right: 1px solid var(--line); padding: 28px 22px 28px 0; }
+.create-form label { color: var(--muted); display: block; font: 12px Arial, sans-serif; margin: 26px 0 8px; }
+.input-row { display: flex; gap: 6px; }
+.input-row input { background: var(--panel); border: 1px solid var(--line); color: var(--ink); font: 15px Georgia, "Times New Roman", serif; min-width: 0; padding: 12px; width: 100%; }
+button { cursor: pointer; }
+.input-row button, .upload-form > button { background: var(--purple); border: 0; color: white; font: 700 13px Arial, sans-serif; padding: 0 16px; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+.project-list { border-top: 1px solid var(--line); margin-top: 28px; }
+.project-item { align-items: flex-start; background: transparent; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); display: flex; flex-direction: column; font: 16px Georgia, "Times New Roman", serif; gap: 5px; padding: 16px 8px; text-align: left; width: 100%; }
+.project-item.selected { border-left: 3px solid var(--blue); padding-left: 5px; }
+.project-item small, .file-row small { color: var(--muted); font: 11px Arial, sans-serif; text-transform: uppercase; }
+.muted { color: var(--muted); font: 15px/1.5 Arial, sans-serif; }
+.project-detail { padding: 38px 0 38px 44px; }
+.detail-heading { align-items: center; display: flex; justify-content: space-between; }
+.detail-heading h2, .empty-detail h2 { font-size: clamp(38px, 5vw, 68px); margin: 0 0 12px; }
+.project-mark { color: var(--yellow); font: 700 13px Arial, sans-serif; }
+.upload-panel { background: var(--panel); border-left: 3px solid var(--yellow); display: flex; gap: 30px; justify-content: space-between; margin-top: 34px; padding: 25px; }
+.upload-panel h3 { font-size: 27px; margin: 8px 0; }
+.upload-form { align-items: flex-end; display: flex; flex-direction: column; gap: 10px; min-width: 250px; }
+.file-picker { border: 1px dashed var(--line); color: var(--muted); cursor: pointer; font: 12px Arial, sans-serif; overflow: hidden; padding: 14px; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+.file-picker input { display: none; }
+.upload-form > button { padding: 12px 16px; }
+.file-list { margin-top: 42px; }
+.list-heading { border-bottom: 2px solid var(--ink); display: flex; font: 700 11px Arial, sans-serif; justify-content: space-between; letter-spacing: .08em; padding-bottom: 10px; text-transform: uppercase; }
+.file-row { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 17px 0; }
+.file-row strong { display: block; font-size: 17px; font-weight: 400; margin-bottom: 6px; }
+.file-status { align-items: center; display: flex; font: 11px Arial, sans-serif; gap: 14px; text-transform: uppercase; }
+.file-status span { color: #17687e; }
+.file-status button { background: transparent; border: 1px solid var(--purple); color: var(--purple); font: 11px Arial, sans-serif; padding: 7px 9px; }
+.message { color: var(--muted); font: 12px Arial, sans-serif; margin-top: 25px; }
+.empty-detail { padding-top: 110px; }
+
 @media (max-width: 700px) {
   .workspace { padding: 22px 18px 48px; }
   .topbar { gap: 18px; }
@@ -48,4 +81,9 @@ h3 { font-size: 28px; font-weight: 400; margin: 42px 0 12px; }
   .cards { grid-template-columns: 1fr; }
   .module-card, .module-card + .module-card { border-bottom: 1px solid var(--line); border-right: 0; min-height: auto; padding: 24px 0; }
   .module-card:last-child { border-bottom: 0; }
+  .workspace-grid { grid-template-columns: 1fr; }
+  .project-panel { border-bottom: 1px solid var(--line); border-right: 0; padding: 24px 0; }
+  .project-detail { padding: 36px 0; }
+  .upload-panel { align-items: stretch; flex-direction: column; }
+  .upload-form { align-items: stretch; min-width: 0; }
 }

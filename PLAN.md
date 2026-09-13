@@ -80,14 +80,14 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 - [x] Add formatting, linting, type checking, and test commands
 - [x] Add a minimal health-check endpoint and application shell
 - [x] Add CI checks for tests, linting, and type checking where practical
-- [ ] Keep the README concise and focused on setup and development commands
+- [x] Keep the README concise and focused on setup and development commands
 
 **Exit criteria:**
 
-- [ ] A new developer can install dependencies and start the application locally
-- [ ] Frontend and backend health checks work
-- [ ] A clean checkout passes the initial quality checks
-- [ ] Unit tests run with one documented command
+- [x] A new developer can install dependencies and start the application locally
+- [x] Frontend and backend health checks work
+- [x] A clean checkout passes the initial quality checks
+- [x] Unit tests run with one documented command
 
 ### Phase 2 - Projects, Clients, Files, and Local Storage
 
@@ -95,21 +95,21 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Create database models for clients, projects, files, processing jobs, and revisions
-- [ ] Add project and client create, read, update, and archive operations
-- [ ] Implement local file storage outside the source tree
-- [ ] Add file type, size, checksum, upload date, and processing-status metadata
-- [ ] Validate file extensions and MIME types without trusting the extension alone
-- [ ] Add upload, list, download, and delete/archive workflows
+- [x] Create database models for clients, projects, files, processing jobs, and revisions
+- [x] Add project and client create, read, update, and archive operations
+- [x] Implement local file storage outside the source tree
+- [x] Add file type, size, checksum, upload date, and processing-status metadata
+- [x] Validate file extensions and MIME types without trusting the extension alone
+- [x] Add upload, list, download, and delete/archive workflows
 - [ ] Add clear processing states: queued, processing, completed, failed, and unsupported
 
 **Exit criteria:**
 
-- [ ] A user can create a project and upload supported files to it
-- [ ] Uploaded files remain available after application restart
-- [ ] Duplicate files are detected by checksum or handled explicitly
-- [ ] Invalid and unsupported files produce clear user-facing errors
-- [ ] Storage-path and database tests pass
+- [x] A user can create a project and upload supported files to it
+- [x] Uploaded files remain available after application restart
+- [x] Duplicate files are detected by checksum or handled explicitly
+- [x] Invalid and unsupported files produce clear user-facing errors
+- [x] Storage-path and database tests pass
 
 ### Phase 3 - File Normalization and Extraction Pipeline
 

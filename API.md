@@ -24,6 +24,8 @@ Returns application and dependency status.
 - `PATCH /clients/{client_id}` - update a client
 - `POST /clients/{client_id}/archive` - archive a client
 
+Client and project routes are available without authentication in the current local single-user MVP.
+
 ## Projects
 
 - `POST /projects` - create a project
@@ -41,6 +43,8 @@ Returns application and dependency status.
 - `POST /projects/{project_id}/files/{file_id}/process` - start or retry processing
 - `GET /projects/{project_id}/processing` - list processing jobs
 - `GET /projects/{project_id}/processing/{job_id}` - retrieve job status and warnings
+
+Supported upload extensions are `.pdf`, `.dxf`, `.csv`, and `.txt`. Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`.
 
 ## Site Model
 
