@@ -1,0 +1,17 @@
+{
+  "name": "civil-engineering-ai",
+  "private": true,
+  "workspaces": ["frontend"],
+  "scripts": {
+    "dev": "npm run dev --workspace frontend",
+    "dev:backend": "cd backend && uv run uvicorn --app-dir src civil_engineering.main:app --reload",
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend",
+    "typecheck": "npm run typecheck --workspace frontend",
+    "format:check": "cd backend && uv run ruff format --check .",
+    "format": "cd backend && uv run ruff format .",
+    "test:backend": "cd backend && uv run pytest",
+    "test": "npm run test:backend",
+    "db:upgrade": "cd backend && uv run alembic upgrade head"
+  }
+}

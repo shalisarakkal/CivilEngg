@@ -73,13 +73,13 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Create the frontend and backend application structure
-- [ ] Add `.gitignore`, environment-variable templates, and local configuration
-- [ ] Add dependency management and documented setup commands
-- [ ] Add database configuration and the initial migration workflow
-- [ ] Add formatting, linting, type checking, and test commands
-- [ ] Add a minimal health-check endpoint and application shell
-- [ ] Add CI checks for tests, linting, and type checking where practical
+- [x] Create the frontend and backend application structure
+- [x] Add `.gitignore`, environment-variable templates, and local configuration
+- [x] Add dependency management and documented setup commands
+- [x] Add database configuration and the initial migration workflow
+- [x] Add formatting, linting, type checking, and test commands
+- [x] Add a minimal health-check endpoint and application shell
+- [x] Add CI checks for tests, linting, and type checking where practical
 - [ ] Keep the README concise and focused on setup and development commands
 
 **Exit criteria:**

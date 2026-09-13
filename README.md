@@ -37,7 +37,41 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 
 ## Development
 
-The exact setup commands will be added during Phase 1. Do not commit secrets. Use a local environment file based on the future `.env.example`.
+Prerequisites: Node.js, npm, Python 3.12+, and `uv`. PostgreSQL with PostGIS will be required locally when database-backed features are implemented.
+
+```powershell
+Copy-Item .env.example .env
+npm install
+npm run lint
+npm run build
+npm test
+```
+
+Run database migrations after PostgreSQL/PostGIS is available:
+
+```powershell
+cd backend
+uv run alembic upgrade head
+```
+
+Start the frontend with:
+
+```powershell
+npm run dev
+```
+
+Start the backend with:
+
+```powershell
+cd backend
+uv run uvicorn --app-dir src civil_engineering.main:app --reload
+```
+
+The frontend runs at `http://localhost:3000` and the backend health endpoint is available at `http://localhost:8000/health`.
+
+Database-backed features will use a locally installed PostgreSQL/PostGIS service. The current health endpoint and tests do not require a running database.
+
+Do not commit secrets. Use a local environment file based on `.env.example`.
 
 ## Scope Rule
 
