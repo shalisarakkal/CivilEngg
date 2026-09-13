@@ -40,12 +40,16 @@ Client and project routes are available without authentication in the current lo
 - `GET /projects/{project_id}/files` - list source files
 - `GET /projects/{project_id}/files/{file_id}` - retrieve file metadata
 - `GET /projects/{project_id}/files/{file_id}/download` - download a permitted file
+- `DELETE /projects/{project_id}/files/{file_id}` - archive a source file and hide it from normal listings
+- `GET /admin/files/archived` - list archived files
+- `POST /admin/files/{file_id}/restore` - restore an archived file
+- `DELETE /admin/files/{file_id}` - permanently purge an archived file
 - `POST /projects/{project_id}/files/{file_id}/process` - start or retry processing
 - `GET /projects/{project_id}/files/{file_id}/extraction` - retrieve the latest normalized extraction
 - `GET /projects/{project_id}/processing` - list processing jobs
 - `GET /projects/{project_id}/processing/{job_id}` - retrieve job status and warnings
 
-Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, and `.tiff`. Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`. Processing currently runs synchronously and records `processing`, `completed`, or `failed` status. TIFF/TIF processing records raster metadata and reports that OCR is not enabled; asynchronous execution remains a later optimization.
+Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, and `.tiff`. Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`, including archived records. Delete archives the physical file and preserves metadata, revisions, and calculations. Processing currently runs synchronously and records `processing`, `completed`, or `failed` status. TIFF/TIF processing records raster metadata and reports that OCR is not enabled; asynchronous execution remains a later optimization.
 
 ## Site Model
 
@@ -56,12 +60,15 @@ Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, and `.ti
 - `POST /projects/{project_id}/site-model/revisions/from-extraction/{file_id}` - accept an extraction into a site-model revision
 - `GET /projects/{project_id}/site-model/revisions` - list site-model revisions
 - `GET /projects/{project_id}/site-model/revisions/{revision_id}/entities` - list revision entities
+- `GET /projects/{project_id}/site-model/revisions/{revision_id}/compare/{other_revision_id}` - compare revisions
 
 ## Calculations
 
 ### `POST /projects/{project_id}/calculations`
 
 Accepts a calculation type, input entity IDs or explicit points, units, and optional revision ID. Returns the formula, normalized inputs, result, unit, assumptions, and source references.
+
+Area and perimeter also accept native Circle JSON, for example `{"type":"Circle","center":[100,200],"radius":25}`. The radius uses `coordinate_unit`; area uses `pi * radius^2` and perimeter uses `2 * pi * radius`.
 
 Initial calculation types:
 
@@ -72,7 +79,7 @@ Initial calculation types:
 
 - `perimeter`
 
-Calculation responses include normalized inputs, formula, result, unit, assumptions, source entity IDs, and optional revision ID. The current engine supports deterministic distance, area, perimeter, and slope calculations; elevation lookup/statistics are still pending.
+Geometry calculation requests include both `coordinate_unit` and output `unit`. For example, coordinates `[10,0]` and `[5,0]` with both values set to `ft` produce `5 ft`; with both set to `m`, they produce `5 m` (or `16.404 ft` when output is `ft`). Calculation responses include normalized inputs, formula, result, unit, assumptions, source entity IDs, and optional revision ID. Elevation requests return average result plus minimum, maximum, average, and count details.
 
 ## Summaries and Questions
 

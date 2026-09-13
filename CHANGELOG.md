@@ -18,6 +18,11 @@ All notable project changes will be recorded here. Entries should describe user-
 - TIFF/TIF upload support with raster metadata extraction; OCR remains deferred.
 - Initial site-model revisions with Shapely validation, PyProj transformation support, and read APIs.
 - Deterministic distance, area, perimeter, and slope calculations with persisted provenance.
+- Phase 6 workspace controls for file deletion, site-model revision inspection, and calculation forms/results.
+- Explicit geometry coordinate units for calculations, preventing unintended meter-to-feet conversion.
+- Native Circle geometry support for area and perimeter calculations.
+- Phase 6 idempotent revision acceptance and soft-delete file archiving with in-app confirmation.
+- Phase 6 admin archive restore/purge, revision comparison, elevation statistics, and geometry preview.
 
 ### Planned
 

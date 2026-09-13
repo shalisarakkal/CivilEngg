@@ -11,6 +11,7 @@ from civil_engineering.calculations import (
     CalculationError,
     calculate_area,
     calculate_distance,
+    calculate_elevation_statistics,
     calculate_perimeter,
     calculate_slope,
 )
@@ -43,7 +44,13 @@ from civil_engineering.schemas import (
     SourceFileResponse,
 )
 from civil_engineering.site_model import SiteModelError, normalize_geometry
-from civil_engineering.storage import FileValidationError, remove_file, save_upload
+from civil_engineering.storage import (
+    FileValidationError,
+    archive_file,
+    remove_file,
+    restore_file,
+    save_upload,
+)
 
 router = APIRouter()
 
@@ -195,7 +202,9 @@ async def upload_file(
 @router.get("/projects/{project_id}/files", response_model=list[SourceFileResponse])
 def list_files(project_id: str, database: Session = Depends(get_db)) -> list[SourceFile]:
     get_project_or_404(project_id, database)
-    statement = select(SourceFile).where(SourceFile.project_id == project_id)
+    statement = select(SourceFile).where(
+        SourceFile.project_id == project_id, SourceFile.deleted_at.is_(None)
+    )
     return list(database.scalars(statement))
 
 
@@ -208,7 +217,9 @@ def download_file(
         SourceFile.id == file_id, SourceFile.project_id == project_id
     )
     source_file = database.scalar(statement)
-    if source_file is None or not Path(source_file.stored_path).is_file():
+    if source_file is None or source_file.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not Path(source_file.stored_path).is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(
         source_file.stored_path,
@@ -226,8 +237,12 @@ def delete_file(project_id: str, file_id: str, database: Session = Depends(get_d
     source_file = database.scalar(statement)
     if source_file is None:
         raise HTTPException(status_code=404, detail="File not found")
-    remove_file(source_file.stored_path)
-    database.delete(source_file)
+    if source_file.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="File is already archived")
+    source_file.status_before_delete = source_file.status
+    source_file.archived_path = str(archive_file(source_file.stored_path, project_id, file_id))
+    source_file.deleted_at = datetime.now(timezone.utc)
+    source_file.status = "deleted"
     database.commit()
 
 
@@ -246,6 +261,19 @@ def process_file(
     source_file = database.scalar(statement)
     if source_file is None:
         raise HTTPException(status_code=404, detail="File not found")
+    if source_file.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Archived files cannot be processed")
+    if Path(source_file.stored_path).suffix.lower() not in {
+        ".pdf",
+        ".dxf",
+        ".csv",
+        ".txt",
+        ".tif",
+        ".tiff",
+    }:
+        source_file.status = "unsupported"
+        database.commit()
+        raise HTTPException(status_code=400, detail="Unsupported processing file type")
     job = ProcessingJob(
         project_id=project_id,
         source_file_id=file_id,
@@ -289,6 +317,49 @@ def list_processing_jobs(
     get_project_or_404(project_id, database)
     statement = select(ProcessingJob).where(ProcessingJob.project_id == project_id)
     return list(database.scalars(statement))
+
+
+@router.get("/admin/files/archived", response_model=list[SourceFileResponse])
+def list_archived_files(database: Session = Depends(get_db)) -> list[SourceFile]:
+    return list(
+        database.scalars(
+            select(SourceFile)
+            .where(SourceFile.deleted_at.is_not(None))
+            .order_by(SourceFile.deleted_at.desc())
+        )
+    )
+
+
+@router.post("/admin/files/{file_id}/restore", response_model=SourceFileResponse)
+def restore_archived_file(file_id: str, database: Session = Depends(get_db)) -> SourceFile:
+    source_file = database.get(SourceFile, file_id)
+    if source_file is None or source_file.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Archived file not found")
+    extension = Path(source_file.original_name).suffix.lower()
+    try:
+        restored_path = restore_file(
+            source_file.archived_path or "", source_file.project_id, source_file.id, extension
+        )
+    except FileValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    source_file.stored_path = str(restored_path)
+    source_file.archived_path = None
+    source_file.deleted_at = None
+    source_file.status = source_file.status_before_delete or "queued"
+    source_file.status_before_delete = None
+    database.commit()
+    database.refresh(source_file)
+    return source_file
+
+
+@router.delete("/admin/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+def purge_archived_file(file_id: str, database: Session = Depends(get_db)) -> None:
+    source_file = database.get(SourceFile, file_id)
+    if source_file is None or source_file.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Archived file not found")
+    remove_file(source_file.archived_path or source_file.stored_path)
+    database.delete(source_file)
+    database.commit()
 
 
 @router.get("/projects/{project_id}/processing/{job_id}", response_model=ProcessingJobResponse)
@@ -348,6 +419,12 @@ def create_site_model_revision(
     )
     if extraction is None:
         raise HTTPException(status_code=404, detail="Extraction not found")
+    existing_revisions = database.scalars(
+        select(ProjectRevision).where(ProjectRevision.project_id == project_id)
+    )
+    for existing in existing_revisions:
+        if existing.source_job_ids == [extraction.processing_job_id]:
+            return existing
     current_revision = database.scalar(
         select(func.max(ProjectRevision.revision_number)).where(
             ProjectRevision.project_id == project_id
@@ -425,6 +502,42 @@ def list_site_model_entities(
     )
 
 
+@router.get("/projects/{project_id}/site-model/revisions/{revision_id}/compare/{other_revision_id}")
+def compare_site_model_revisions(
+    project_id: str,
+    revision_id: str,
+    other_revision_id: str,
+    database: Session = Depends(get_db),
+) -> dict[str, list[dict[str, Any]]]:
+    get_project_or_404(project_id, database)
+    revisions = database.scalars(
+        select(ProjectRevision).where(
+            ProjectRevision.project_id == project_id,
+            ProjectRevision.id.in_([revision_id, other_revision_id]),
+        )
+    ).all()
+    if len(revisions) != 2:
+        raise HTTPException(status_code=404, detail="Both site-model revisions are required")
+    entities = database.scalars(
+        select(SiteModelEntity).where(
+            SiteModelEntity.revision_id.in_([revision_id, other_revision_id])
+        )
+    ).all()
+    first = {entity.id: entity for entity in entities if entity.revision_id == revision_id}
+    second = {entity.id: entity for entity in entities if entity.revision_id == other_revision_id}
+    added = [second[key].__dict__ for key in second.keys() - first.keys()]
+    removed = [first[key].__dict__ for key in first.keys() - second.keys()]
+    changed = [
+        {"before": first[key].__dict__, "after": second[key].__dict__}
+        for key in first.keys() & second.keys()
+        if first[key].geometry != second[key].geometry
+        or first[key].properties != second[key].properties
+    ]
+    for item in added + removed + changed:
+        item.pop("_sa_instance_state", None)
+    return {"added": added, "removed": removed, "changed": changed}
+
+
 @router.post(
     "/projects/{project_id}/calculations",
     response_model=CalculationResponse,
@@ -450,21 +563,34 @@ def create_calculation(
             result = calculate_distance(
                 cast(dict[str, Any], payload.inputs["first_geometry"]),
                 cast(dict[str, Any], payload.inputs["second_geometry"]),
+                payload.coordinate_unit,
                 payload.unit,
             )
         elif payload.calculation_type == "area":
-            result = calculate_area(cast(dict[str, Any], payload.inputs["geometry"]), payload.unit)
-        elif payload.calculation_type == "perimeter":
-            result = calculate_perimeter(
-                cast(dict[str, Any], payload.inputs["geometry"]), payload.unit
-            )
-        else:
-            result = calculate_slope(
-                float(cast(Any, payload.inputs["start_elevation"])),
-                float(cast(Any, payload.inputs["end_elevation"])),
-                float(cast(Any, payload.inputs["horizontal_distance"])),
+            result = calculate_area(
+                cast(dict[str, Any], payload.inputs["geometry"]),
+                payload.coordinate_unit,
                 payload.unit,
             )
+        elif payload.calculation_type == "perimeter":
+            result = calculate_perimeter(
+                cast(dict[str, Any], payload.inputs["geometry"]),
+                payload.coordinate_unit,
+                payload.unit,
+            )
+        else:
+            if payload.calculation_type == "elevation":
+                result = calculate_elevation_statistics(
+                    [float(value) for value in cast(list[Any], payload.inputs["elevations"])],
+                    payload.unit,
+                )
+            else:
+                result = calculate_slope(
+                    float(cast(Any, payload.inputs["start_elevation"])),
+                    float(cast(Any, payload.inputs["end_elevation"])),
+                    float(cast(Any, payload.inputs["horizontal_distance"])),
+                    payload.unit,
+                )
     except (CalculationError, KeyError, TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     calculation = CalculationResult(
@@ -477,6 +603,7 @@ def create_calculation(
         result=result["result"],
         unit=result["unit"],
         assumptions=result["assumptions"],
+        details=result.get("statistics"),
     )
     database.add(calculation)
     database.commit()

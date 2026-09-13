@@ -74,6 +74,9 @@ class SourceFile(Base):
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_path: Mapped[str | None] = mapped_column(String(1000))
+    status_before_delete: Mapped[str | None] = mapped_column(String(32))
 
     project: Mapped[Project] = relationship(back_populates="source_files")
     processing_jobs: Mapped[list["ProcessingJob"]] = relationship(
@@ -179,6 +182,7 @@ class CalculationResult(Base):
     result: Mapped[float] = mapped_column(nullable=False)
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
     assumptions: Mapped[list[Any] | None] = mapped_column(JSON)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped[Project] = relationship(back_populates="calculations")

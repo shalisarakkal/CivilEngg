@@ -1,5 +1,6 @@
 from hashlib import sha256
 from pathlib import Path
+from shutil import move
 
 from fastapi import UploadFile
 
@@ -76,3 +77,28 @@ def remove_file(stored_path: str) -> None:
     if root not in path.parents:
         raise FileValidationError("Stored path is outside local storage")
     path.unlink(missing_ok=True)
+
+
+def archive_file(stored_path: str, project_id: str, file_id: str) -> Path:
+    source = Path(stored_path).resolve()
+    root = storage_root()
+    if root not in source.parents:
+        raise FileValidationError("Stored path is outside local storage")
+    archive = root / ".archive" / project_id
+    archive.mkdir(parents=True, exist_ok=True)
+    destination = archive / source.name
+    if source.is_file():
+        move(str(source), str(destination))
+    return destination
+
+
+def restore_file(archived_path: str, project_id: str, file_id: str, extension: str) -> Path:
+    archive = Path(archived_path).resolve()
+    root = storage_root()
+    if root not in archive.parents:
+        raise FileValidationError("Archived path is outside local storage")
+    destination = root / project_id / f"{file_id}{extension}"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if archive.is_file():
+        move(str(archive), str(destination))
+    return destination

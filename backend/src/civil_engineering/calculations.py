@@ -34,58 +34,103 @@ def convert_distance(value: float, from_unit: str, to_unit: str) -> float:
     return value * source / target
 
 
-def calculate_distance(first: dict[str, Any], second: dict[str, Any], unit: str) -> dict[str, Any]:
+def calculate_distance(
+    first: dict[str, Any], second: dict[str, Any], source_unit: str, output_unit: str
+) -> dict[str, Any]:
     try:
         first_geometry = shape(first)
         second_geometry = shape(second)
     except Exception as error:
         raise CalculationError(f"Geometry could not be parsed: {error}") from error
-    value_meters = first_geometry.distance(second_geometry)
-    value = convert_distance(value_meters, "m", unit)
+    value = convert_distance(first_geometry.distance(second_geometry), source_unit, output_unit)
     return {
         "calculation_type": "distance",
         "inputs": {"first_geometry": first, "second_geometry": second},
         "formula": "distance(first geometry, second geometry)",
         "result": value,
-        "unit": unit,
-        "assumptions": ["Input coordinates use the same projected coordinate system"],
+        "unit": output_unit,
+        "assumptions": [f"Input coordinates are measured in {source_unit}"],
     }
 
 
-def calculate_area(geometry_data: dict[str, Any], unit: str) -> dict[str, Any]:
+def calculate_area(
+    geometry_data: dict[str, Any], source_unit: str, output_unit: str
+) -> dict[str, Any]:
+    if geometry_data.get("type") == "Circle":
+        radius = _circle_radius(geometry_data)
+        value = convert_distance(radius, source_unit, output_unit) ** 2 * math.pi
+        return {
+            "calculation_type": "area",
+            "inputs": {"geometry": geometry_data},
+            "formula": "pi * radius^2",
+            "result": value,
+            "unit": f"square_{output_unit}",
+            "assumptions": [f"Circle radius is measured in {source_unit}"],
+        }
     try:
         geometry = shape(geometry_data)
     except Exception as error:
         raise CalculationError(f"Geometry could not be parsed: {error}") from error
+    if geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+        raise CalculationError(f"{geometry.geom_type} geometry cannot be used for area")
     if geometry.is_empty or not geometry.is_valid:
         raise CalculationError("Geometry is empty or invalid")
-    value = convert_distance(math.sqrt(geometry.area), "m", unit) ** 2
+    value = convert_distance(1, source_unit, output_unit) ** 2 * geometry.area
     return {
         "calculation_type": "area",
         "inputs": {"geometry": geometry_data},
         "formula": "area(geometry)",
         "result": value,
-        "unit": f"square_{unit}",
-        "assumptions": ["Input coordinates use the same projected coordinate system"],
+        "unit": f"square_{output_unit}",
+        "assumptions": [f"Input coordinates are measured in {source_unit}"],
     }
 
 
-def calculate_perimeter(geometry_data: dict[str, Any], unit: str) -> dict[str, Any]:
+def calculate_perimeter(
+    geometry_data: dict[str, Any], source_unit: str, output_unit: str
+) -> dict[str, Any]:
+    if geometry_data.get("type") == "Circle":
+        radius = _circle_radius(geometry_data)
+        value = convert_distance(radius, source_unit, output_unit) * 2 * math.pi
+        return {
+            "calculation_type": "perimeter",
+            "inputs": {"geometry": geometry_data},
+            "formula": "2 * pi * radius",
+            "result": value,
+            "unit": output_unit,
+            "assumptions": [f"Circle radius is measured in {source_unit}"],
+        }
     try:
         geometry = shape(geometry_data)
     except Exception as error:
         raise CalculationError(f"Geometry could not be parsed: {error}") from error
+    if geometry.geom_type not in {"LineString", "MultiLineString", "Polygon", "MultiPolygon"}:
+        raise CalculationError(f"{geometry.geom_type} geometry cannot be used for perimeter")
     if geometry.is_empty or not geometry.is_valid:
         raise CalculationError("Geometry is empty or invalid")
-    value = convert_distance(geometry.length, "m", unit)
+    value = convert_distance(geometry.length, source_unit, output_unit)
     return {
         "calculation_type": "perimeter",
         "inputs": {"geometry": geometry_data},
         "formula": "length(geometry boundary)",
         "result": value,
-        "unit": unit,
-        "assumptions": ["Input coordinates use the same projected coordinate system"],
+        "unit": output_unit,
+        "assumptions": [f"Input coordinates are measured in {source_unit}"],
     }
+
+
+def _circle_radius(geometry_data: dict[str, Any]) -> float:
+    radius = geometry_data.get("radius")
+    if not isinstance(radius, (int, float)) or not math.isfinite(radius) or radius <= 0:
+        raise CalculationError("Circle radius must be a finite number greater than zero")
+    center = geometry_data.get("center")
+    if (
+        not isinstance(center, list)
+        or len(center) != 2
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in center)
+    ):
+        raise CalculationError("Circle center must contain two finite coordinates")
+    return float(radius)
 
 
 def calculate_slope(
@@ -118,4 +163,24 @@ def calculate_slope(
         "direction": (
             "uphill" if elevation_change > 0 else "downhill" if elevation_change < 0 else "level"
         ),
+    }
+
+
+def calculate_elevation_statistics(values: list[float], unit: str) -> dict[str, Any]:
+    if not values or not all(math.isfinite(value) for value in values):
+        raise CalculationError("Elevation values must contain at least one finite number")
+    statistics = {
+        "minimum": min(values),
+        "maximum": max(values),
+        "average": sum(values) / len(values),
+        "count": len(values),
+    }
+    return {
+        "calculation_type": "elevation",
+        "inputs": {"elevations": values},
+        "formula": "minimum, maximum, and arithmetic average of elevations",
+        "result": statistics["average"],
+        "unit": unit,
+        "assumptions": ["All elevations use the same vertical datum and unit"],
+        "statistics": statistics,
     }

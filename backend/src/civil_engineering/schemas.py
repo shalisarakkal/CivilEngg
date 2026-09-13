@@ -64,6 +64,7 @@ class SourceFileResponse(BaseModel):
     uploaded_at: datetime
     processed_at: datetime | None
     error_message: str | None
+    deleted_at: datetime | None
 
 
 class ProcessingJobResponse(BaseModel):
@@ -120,8 +121,9 @@ class SiteModelRevisionResponse(BaseModel):
 
 
 class CalculationRequest(BaseModel):
-    calculation_type: str = Field(pattern="^(distance|area|perimeter|slope)$")
+    calculation_type: str = Field(pattern="^(distance|area|perimeter|slope|elevation)$")
     inputs: dict[str, object]
+    coordinate_unit: str = Field(default="m", max_length=32)
     unit: str = Field(default="m", max_length=32)
     revision_id: str | None = None
     source_entity_ids: list[str] = Field(default_factory=list)
@@ -140,4 +142,5 @@ class CalculationResponse(BaseModel):
     result: float
     unit: str
     assumptions: list[object] | None
+    details: dict[str, object] | None
     created_at: datetime

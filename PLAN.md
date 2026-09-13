@@ -52,19 +52,19 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Choose the first engineering workflow: site-plan measurement and question answering
-- [ ] Confirm supported MVP file types: PDF, DXF, CSV, TXT, TIFF/TIF, and optionally DOCX
-- [ ] Define supported units and conversion rules, including feet, inches, meters, and percentages
-- [ ] Define the initial site-model entities and their source references
-- [ ] Document handling expectations for unsupported, corrupt, password-protected, or oversized files
-- [ ] Decide whether the first deployment is single-user local use or includes basic authentication
-- [ ] Create a risk register for extraction accuracy, coordinate systems, OCR quality, and AI reliability
+- [x] Choose the first engineering workflow: site-plan measurement and question answering
+- [x] Confirm supported MVP file types: PDF, DXF, CSV, TXT, TIFF/TIF, and optionally DOCX
+- [x] Define supported units and conversion rules, including feet, inches, meters, and percentages
+- [x] Define the initial site-model entities and their source references
+- [x] Document handling expectations for unsupported, corrupt, password-protected, or oversized files
+- [x] Decide whether the first deployment is single-user local use or includes basic authentication
+- [x] Create a risk register for extraction accuracy, coordinate systems, OCR quality, and AI reliability
 
 **Exit criteria:**
 
-- [ ] MVP scope and deferred features are approved
-- [ ] Supported input formats and units are documented
-- [ ] Accuracy and traceability expectations are documented
+- [x] MVP scope and deferred features are approved
+- [x] Supported input formats and units are documented
+- [x] Accuracy and traceability expectations are documented
 - [ ] A representative sample set of civil files is available for testing
 
 ### Phase 1 - Project Scaffolding and Developer Workflow
@@ -101,7 +101,7 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 - [x] Add file type, size, checksum, upload date, and processing-status metadata
 - [x] Validate file extensions and MIME types without trusting the extension alone
 - [x] Add upload, list, download, and delete/archive workflows
-- [ ] Add clear processing states: queued, processing, completed, failed, and unsupported
+- [x] Add clear processing states: queued, processing, completed, failed, and unsupported
 
 **Exit criteria:**
 
@@ -153,10 +153,10 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 **Exit criteria:**
 
 - [x] An ingested sample project produces a queryable site model
-- [ ] Geometry has consistent engineering units and complete coordinate metadata
+- [x] Geometry has consistent engineering units and complete coordinate metadata
 - [x] Source references are retained for every user-visible model element
 - [x] Invalid geometry is reported with validation status
-- [ ] Revision changes can be compared
+- [x] Revision changes can be compared
 
 ### Phase 5 - Engineering Calculation Engine
 
@@ -166,7 +166,7 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 - [x] Implement unit conversion and input validation
 - [x] Implement point-to-point and geometry-to-geometry distances
-- [ ] Implement elevation lookup and elevation statistics where data supports them
+- [x] Implement elevation lookup and elevation statistics where data supports them
 - [x] Implement slope as `slope = (change in elevation / horizontal distance) * 100`
 - [x] Support slope direction and clearly label percent versus ratio outputs
 - [x] Add parcel area and basic geometry measurements
@@ -188,23 +188,31 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Create project dashboard with files, processing status, and recent revisions
-- [ ] Add upload and processing-status interactions
-- [ ] Add map/drawing view with fit-to-project behavior
-- [ ] Render selectable site-model layers and source references
-- [ ] Add calculation forms for distance, elevation, slope, and area
-- [ ] Display assumptions, units, warnings, and calculation provenance
-- [ ] Add responsive layouts for desktop and smaller screens
-- [ ] Use the project color scheme consistently while preserving readable contrast
-- [ ] Add loading, empty, error, and unsupported-data states
+- [x] Create project dashboard with files, processing status, and recent revisions
+- [x] Add upload and processing-status interactions
+- [x] Add map/drawing view with fit-to-project behavior
+- [x] Render selectable site-model layers and source references
+- [x] Add calculation forms for distance, elevation, slope, and area
+- [x] Display assumptions, units, warnings, and calculation provenance
+- [x] Add responsive layouts for desktop and smaller screens
+- [x] Use the project color scheme consistently while preserving readable contrast
+- [x] Add loading, empty, error, and unsupported-data states
 
 **Exit criteria:**
 
-- [ ] A user can upload a file, inspect extracted geometry, and run a calculation from the UI
+- [x] A user can upload a file, inspect extracted geometry, and run a calculation from the UI
 - [ ] Selecting a result highlights the relevant geometry or source location where possible
-- [ ] The UI clearly distinguishes extracted, calculated, and AI-generated information
-- [ ] Core screens work at desktop and mobile viewport sizes
+- [x] The UI clearly distinguishes extracted, calculated, and AI-generated information
+- [x] Core screens work at desktop and mobile viewport sizes
 - [ ] Frontend tests cover upload state, calculation state, and error state
+
+Phase 6 lifecycle additions:
+
+- [x] Make revision acceptance idempotent
+- [x] Archive deleted source files and preserve metadata
+- [x] Preserve archived checksums for duplicate detection
+- [x] Add in-app deletion confirmation
+- [x] Add admin archive list, restore, and permanent purge routes/UI
 
 ### Phase 7 - Site Summaries and Source-Grounded Question Answering
 

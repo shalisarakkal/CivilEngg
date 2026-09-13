@@ -4,7 +4,7 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project has working Phase 1 through Phase 5 foundations. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. The next implementation slice is the Phase 6 engineering workspace UI and map view:
+The project has working Phase 1 through Phase 5 foundations and an initial Phase 6 engineering workspace. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. Phase 6 now archives deleted source files and prevents duplicate revision acceptance. The next slice is admin restore/purge and map/site-model visualization:
 
 1. Create a project.
 2. Upload a supported file.
@@ -24,6 +24,7 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 - [API.md](API.md) - initial API contract
 - [TESTING.md](TESTING.md) - testing strategy
 - [VERIFY.md](VERIFY.md) - manual verification runbook
+- [RISK_REGISTER.md](RISK_REGISTER.md) - MVP risks and mitigations
 - [DECISIONS.md](DECISIONS.md) - recorded technical decisions
 - [CHANGELOG.md](CHANGELOG.md) - notable project changes
 

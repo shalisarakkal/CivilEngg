@@ -79,6 +79,11 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         entities = client.get(f"/projects/{project_id}/site-model/revisions/{revision_id}/entities")
         assert entities.status_code == 200
         assert entities.json()[0]["validation_status"] == "unmapped"
+        repeated_revision = client.post(
+            f"/projects/{project_id}/site-model/revisions/from-extraction/{file_data['id']}"
+        )
+        assert repeated_revision.status_code == 201
+        assert repeated_revision.json()["id"] == revision_id
 
         calculation = client.post(
             f"/projects/{project_id}/calculations",
@@ -109,6 +114,30 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
             },
         )
         assert invalid_calculation.status_code == 400
+
+        elevation = client.post(
+            f"/projects/{project_id}/calculations",
+            json={
+                "calculation_type": "elevation",
+                "inputs": {"elevations": [100, 102, 104]},
+                "unit": "ft",
+            },
+        )
+        assert elevation.status_code == 201
+        assert elevation.json()["details"]["minimum"] == 100
+
+        deleted = client.delete(f"/projects/{project_id}/files/{file_data['id']}")
+        assert deleted.status_code == 204
+        assert client.get(f"/projects/{project_id}/files").json() == []
+        archived = client.get("/admin/files/archived")
+        assert archived.status_code == 200
+        assert any(item["id"] == file_data["id"] for item in archived.json())
+        restored = client.post(f"/admin/files/{file_data['id']}/restore")
+        assert restored.status_code == 200
+        assert client.get(f"/projects/{project_id}/files").json()[0]["id"] == file_data["id"]
+        client.delete(f"/projects/{project_id}/files/{file_data['id']}")
+        purged = client.delete(f"/admin/files/{file_data['id']}")
+        assert purged.status_code == 204
 
         archived = client.post(f"/projects/{project_id}/archive")
         assert archived.status_code == 200

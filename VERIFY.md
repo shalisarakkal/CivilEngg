@@ -92,7 +92,7 @@ uv run alembic current
 Expected:
 
 ```text
-0005_add_calculation_results (head)
+0007_add_calculation_details (head)
 ```
 
 Return to the project root:
@@ -293,7 +293,7 @@ $calculation = Invoke-RestMethod `
   -Uri "http://127.0.0.1:8000/projects/$($project.id)/calculations" `
   -Method Post `
   -ContentType "application/json" `
-  -Body '{"calculation_type":"slope","inputs":{"start_elevation":100,"end_elevation":104,"horizontal_distance":100},"unit":"ft"}'
+  -Body '{"calculation_type":"slope","inputs":{"start_elevation":100,"end_elevation":104,"horizontal_distance":100},"coordinate_unit":"ft","unit":"ft"}'
 
 $calculation | Format-List
 ```
@@ -334,6 +334,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - TIFF/TIF metadata is supported; TIFF OCR is deferred.
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
-- Elevation lookup and elevation statistics are not yet implemented.
+- Elevation statistics are available through the calculations API.
+- User deletion archives the physical file; admin restore and permanent purge are available through the archive panel/API.
 - Authentication is not yet enabled for the local single-user workflow.
 - The real PostgreSQL migration is verified locally, but the application still requires PostgreSQL/PostGIS to be running for database-backed API checks.
