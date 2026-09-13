@@ -16,6 +16,8 @@ All notable project changes will be recorded here. Entries should describe user-
 - Normalized TXT, CSV, PDF, and DXF extraction with source references and warnings.
 - Versioned extracted-document storage and completed/failed processing statuses.
 - TIFF/TIF upload support with raster metadata extraction; OCR remains deferred.
+- Initial site-model revisions with Shapely validation, PyProj transformation support, and read APIs.
+- Deterministic distance, area, perimeter, and slope calculations with persisted provenance.
 
 ### Planned
 

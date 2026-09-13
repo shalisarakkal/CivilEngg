@@ -142,22 +142,21 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Define site-model schemas for parcels, structures, roads, access, utilities, contours, points, elevations, annotations, and source references
-- [ ] Normalize geometry into a project coordinate system
-- [ ] Support explicit coordinate reference systems and document assumptions when a CRS is missing
-- [ ] Use Shapely and GeoPandas for geometry validation and operations
-- [ ] Use PyProj for coordinate transformations where required
-- [ ] Build a site-model revision when new extraction results are accepted
-- [ ] Add validation for invalid geometries, missing elevations, self-intersections, and unit mismatches
-- [ ] Expose a read-only project/site-model API for the frontend
+- [x] Define initial site-model schemas for extracted entities and source references
+- [x] Normalize supported geometry into a project coordinate system when CRS values are provided
+- [x] Support explicit coordinate reference systems and report transformation failures
+- [x] Use Shapely for geometry validation and PyProj for coordinate transformations
+- [x] Build a site-model revision when new extraction results are accepted
+- [x] Add validation for invalid and unsupported geometries
+- [x] Expose a read-only project/site-model API for the frontend
 
 **Exit criteria:**
 
-- [ ] An ingested sample project produces a queryable site model
-- [ ] Geometry has consistent units and coordinate metadata
-- [ ] Source references are retained for every user-visible model element
-- [ ] Invalid geometry is reported with actionable diagnostics
-- [ ] Revision changes can be inspected or compared
+- [x] An ingested sample project produces a queryable site model
+- [ ] Geometry has consistent engineering units and complete coordinate metadata
+- [x] Source references are retained for every user-visible model element
+- [x] Invalid geometry is reported with validation status
+- [ ] Revision changes can be compared
 
 ### Phase 5 - Engineering Calculation Engine
 
@@ -165,23 +164,23 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Implement unit conversion and input validation
-- [ ] Implement point-to-point and geometry-to-geometry distances
+- [x] Implement unit conversion and input validation
+- [x] Implement point-to-point and geometry-to-geometry distances
 - [ ] Implement elevation lookup and elevation statistics where data supports them
-- [ ] Implement slope as `slope = (change in elevation / horizontal distance) * 100`
-- [ ] Support slope direction and clearly label percent versus ratio outputs
-- [ ] Add parcel area and basic geometry measurements
-- [ ] Return calculation inputs, assumptions, formula, result, units, and source entities
-- [ ] Add deterministic fixtures for known civil-engineering examples
-- [ ] Add tolerance-based tests for floating-point results
+- [x] Implement slope as `slope = (change in elevation / horizontal distance) * 100`
+- [x] Support slope direction and clearly label percent versus ratio outputs
+- [x] Add parcel area and basic geometry measurements
+- [x] Return calculation inputs, assumptions, formula, result, units, and source entities
+- [x] Add deterministic fixtures for known civil-engineering examples
+- [x] Add tolerance-based tests for floating-point results
 
 **Exit criteria:**
 
-- [ ] Identical inputs produce identical results
-- [ ] Calculations reject missing, incompatible, or invalid inputs
-- [ ] Results include enough detail for an engineer to reproduce them
-- [ ] Unit tests cover positive, zero, negative, and boundary cases
-- [ ] Calculation results can be requested through an API without using the AI provider
+- [x] Identical inputs produce identical results
+- [x] Calculations reject missing, incompatible, or invalid inputs
+- [x] Results include enough detail for an engineer to reproduce them
+- [x] Unit tests cover positive, zero, negative, and boundary cases
+- [x] Calculation results can be requested through an API without using the AI provider
 
 ### Phase 6 - Engineering Workspace UI and Map View
 

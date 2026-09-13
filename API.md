@@ -53,6 +53,9 @@ Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, and `.ti
 - `GET /projects/{project_id}/site-model/entities` - list filtered entities
 - `GET /projects/{project_id}/revisions` - list project revisions
 - `GET /projects/{project_id}/revisions/{revision_id}` - retrieve a revision
+- `POST /projects/{project_id}/site-model/revisions/from-extraction/{file_id}` - accept an extraction into a site-model revision
+- `GET /projects/{project_id}/site-model/revisions` - list site-model revisions
+- `GET /projects/{project_id}/site-model/revisions/{revision_id}/entities` - list revision entities
 
 ## Calculations
 
@@ -66,6 +69,10 @@ Initial calculation types:
 - `elevation`
 - `slope`
 - `area`
+
+- `perimeter`
+
+Calculation responses include normalized inputs, formula, result, unit, assumptions, source entity IDs, and optional revision ID. The current engine supports deterministic distance, area, perimeter, and slope calculations; elevation lookup/statistics are still pending.
 
 ## Summaries and Questions
 

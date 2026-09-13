@@ -1,22 +1,35 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from civil_engineering.calculations import (
+    CalculationError,
+    calculate_area,
+    calculate_distance,
+    calculate_perimeter,
+    calculate_slope,
+)
 from civil_engineering.database import get_db
 from civil_engineering.extraction import ExtractionError, parse_file
 from civil_engineering.models import (
+    CalculationResult,
     Client,
     ExtractedDocument,
     ProcessingJob,
     Project,
+    ProjectRevision,
+    SiteModelEntity,
     SourceFile,
     new_id,
 )
 from civil_engineering.schemas import (
+    CalculationRequest,
+    CalculationResponse,
     ClientCreate,
     ClientResponse,
     ClientUpdate,
@@ -25,8 +38,11 @@ from civil_engineering.schemas import (
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
+    SiteModelEntityResponse,
+    SiteModelRevisionResponse,
     SourceFileResponse,
 )
+from civil_engineering.site_model import SiteModelError, normalize_geometry
 from civil_engineering.storage import FileValidationError, remove_file, save_upload
 
 router = APIRouter()
@@ -310,3 +326,191 @@ def read_extraction(
     if extraction is None:
         raise HTTPException(status_code=404, detail="Extraction not found")
     return extraction
+
+
+@router.post(
+    "/projects/{project_id}/site-model/revisions/from-extraction/{file_id}",
+    response_model=SiteModelRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_site_model_revision(
+    project_id: str,
+    file_id: str,
+    source_crs: str | None = None,
+    database: Session = Depends(get_db),
+) -> ProjectRevision:
+    project = get_project_or_404(project_id, database)
+    extraction = database.scalar(
+        select(ExtractedDocument)
+        .join(SourceFile, SourceFile.id == ExtractedDocument.source_file_id)
+        .where(SourceFile.project_id == project_id, ExtractedDocument.source_file_id == file_id)
+        .order_by(ExtractedDocument.revision_number.desc())
+    )
+    if extraction is None:
+        raise HTTPException(status_code=404, detail="Extraction not found")
+    current_revision = database.scalar(
+        select(func.max(ProjectRevision.revision_number)).where(
+            ProjectRevision.project_id == project_id
+        )
+    )
+    revision = ProjectRevision(
+        project_id=project.id,
+        revision_number=(current_revision or 0) + 1,
+        source_job_ids=[extraction.processing_job_id],
+        notes="Accepted from normalized extraction",
+    )
+    database.add(revision)
+    database.flush()
+    for item in extraction.content.get("items", []):
+        value = item.get("value", {})
+        geometry = None
+        validation_status = "unmapped"
+        if isinstance(value, dict) and any(
+            key in value for key in ("start", "end", "point", "points")
+        ):
+            try:
+                geometry = normalize_geometry(
+                    value, source_crs, project.coordinate_reference_system
+                )
+                validation_status = "valid"
+            except SiteModelError:
+                validation_status = "invalid"
+        entity = SiteModelEntity(
+            revision_id=revision.id,
+            entity_type=str(item.get("item_type", "unknown")),
+            geometry=geometry,
+            properties=value if isinstance(value, dict) else {"value": value},
+            source_reference=item.get("source"),
+            validation_status=validation_status,
+        )
+        database.add(entity)
+    database.commit()
+    database.refresh(revision)
+    return revision
+
+
+@router.get(
+    "/projects/{project_id}/site-model/revisions",
+    response_model=list[SiteModelRevisionResponse],
+)
+def list_site_model_revisions(
+    project_id: str, database: Session = Depends(get_db)
+) -> list[ProjectRevision]:
+    get_project_or_404(project_id, database)
+    statement = (
+        select(ProjectRevision)
+        .where(ProjectRevision.project_id == project_id)
+        .order_by(ProjectRevision.revision_number.desc())
+    )
+    return list(database.scalars(statement))
+
+
+@router.get(
+    "/projects/{project_id}/site-model/revisions/{revision_id}/entities",
+    response_model=list[SiteModelEntityResponse],
+)
+def list_site_model_entities(
+    project_id: str, revision_id: str, database: Session = Depends(get_db)
+) -> list[SiteModelEntity]:
+    get_project_or_404(project_id, database)
+    revision = database.scalar(
+        select(ProjectRevision).where(
+            ProjectRevision.id == revision_id, ProjectRevision.project_id == project_id
+        )
+    )
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Site-model revision not found")
+    return list(
+        database.scalars(select(SiteModelEntity).where(SiteModelEntity.revision_id == revision_id))
+    )
+
+
+@router.post(
+    "/projects/{project_id}/calculations",
+    response_model=CalculationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_calculation(
+    project_id: str,
+    payload: CalculationRequest,
+    database: Session = Depends(get_db),
+) -> CalculationResult:
+    project = get_project_or_404(project_id, database)
+    if payload.revision_id is not None:
+        revision = database.scalar(
+            select(ProjectRevision).where(
+                ProjectRevision.id == payload.revision_id,
+                ProjectRevision.project_id == project_id,
+            )
+        )
+        if revision is None:
+            raise HTTPException(status_code=404, detail="Site-model revision not found")
+    try:
+        if payload.calculation_type == "distance":
+            result = calculate_distance(
+                cast(dict[str, Any], payload.inputs["first_geometry"]),
+                cast(dict[str, Any], payload.inputs["second_geometry"]),
+                payload.unit,
+            )
+        elif payload.calculation_type == "area":
+            result = calculate_area(cast(dict[str, Any], payload.inputs["geometry"]), payload.unit)
+        elif payload.calculation_type == "perimeter":
+            result = calculate_perimeter(
+                cast(dict[str, Any], payload.inputs["geometry"]), payload.unit
+            )
+        else:
+            result = calculate_slope(
+                float(cast(Any, payload.inputs["start_elevation"])),
+                float(cast(Any, payload.inputs["end_elevation"])),
+                float(cast(Any, payload.inputs["horizontal_distance"])),
+                payload.unit,
+            )
+    except (CalculationError, KeyError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    calculation = CalculationResult(
+        project_id=project.id,
+        revision_id=payload.revision_id,
+        calculation_type=payload.calculation_type,
+        input_entity_ids=payload.source_entity_ids,
+        inputs=result["inputs"],
+        formula=result["formula"],
+        result=result["result"],
+        unit=result["unit"],
+        assumptions=result["assumptions"],
+    )
+    database.add(calculation)
+    database.commit()
+    database.refresh(calculation)
+    return calculation
+
+
+@router.get("/projects/{project_id}/calculations", response_model=list[CalculationResponse])
+def list_calculations(
+    project_id: str, database: Session = Depends(get_db)
+) -> list[CalculationResult]:
+    get_project_or_404(project_id, database)
+    return list(
+        database.scalars(
+            select(CalculationResult)
+            .where(CalculationResult.project_id == project_id)
+            .order_by(CalculationResult.created_at.desc())
+        )
+    )
+
+
+@router.get(
+    "/projects/{project_id}/calculations/{calculation_id}", response_model=CalculationResponse
+)
+def read_calculation(
+    project_id: str, calculation_id: str, database: Session = Depends(get_db)
+) -> CalculationResult:
+    get_project_or_404(project_id, database)
+    calculation = database.scalar(
+        select(CalculationResult).where(
+            CalculationResult.id == calculation_id,
+            CalculationResult.project_id == project_id,
+        )
+    )
+    if calculation is None:
+        raise HTTPException(status_code=404, detail="Calculation not found")
+    return calculation

@@ -91,3 +91,53 @@ class ExtractedDocumentResponse(BaseModel):
     content: dict[str, object]
     warnings: list[object] | None
     created_at: datetime
+
+
+class SiteModelEntityResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    revision_id: str
+    entity_type: str
+    geometry: dict[str, object] | None
+    properties: dict[str, object] | None
+    unit: str | None
+    elevation: float | None
+    source_reference: dict[str, object] | None
+    confidence: float | None
+    validation_status: str
+
+
+class SiteModelRevisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    revision_number: int
+    created_at: datetime
+    created_by: str | None
+    notes: str | None
+
+
+class CalculationRequest(BaseModel):
+    calculation_type: str = Field(pattern="^(distance|area|perimeter|slope)$")
+    inputs: dict[str, object]
+    unit: str = Field(default="m", max_length=32)
+    revision_id: str | None = None
+    source_entity_ids: list[str] = Field(default_factory=list)
+
+
+class CalculationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    revision_id: str | None
+    calculation_type: str
+    input_entity_ids: list[object] | None
+    inputs: dict[str, object]
+    formula: str
+    result: float
+    unit: str
+    assumptions: list[object] | None
+    created_at: datetime

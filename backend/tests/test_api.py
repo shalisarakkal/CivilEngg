@@ -71,6 +71,45 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         assert extraction.status_code == 200
         assert extraction.json()["parser_name"] == "text"
 
+        site_model = client.post(
+            f"/projects/{project_id}/site-model/revisions/from-extraction/{file_data['id']}"
+        )
+        assert site_model.status_code == 201
+        revision_id = site_model.json()["id"]
+        entities = client.get(f"/projects/{project_id}/site-model/revisions/{revision_id}/entities")
+        assert entities.status_code == 200
+        assert entities.json()[0]["validation_status"] == "unmapped"
+
+        calculation = client.post(
+            f"/projects/{project_id}/calculations",
+            json={
+                "calculation_type": "slope",
+                "inputs": {
+                    "start_elevation": 100,
+                    "end_elevation": 104,
+                    "horizontal_distance": 100,
+                },
+                "unit": "ft",
+            },
+        )
+        assert calculation.status_code == 201
+        assert calculation.json()["result"] == 4
+        assert calculation.json()["formula"]
+
+        invalid_calculation = client.post(
+            f"/projects/{project_id}/calculations",
+            json={
+                "calculation_type": "slope",
+                "inputs": {
+                    "start_elevation": 100,
+                    "end_elevation": 104,
+                    "horizontal_distance": 0,
+                },
+                "unit": "ft",
+            },
+        )
+        assert invalid_calculation.status_code == 400
+
         archived = client.post(f"/projects/{project_id}/archive")
         assert archived.status_code == 200
         assert client.get(f"/projects/{project_id}").status_code == 404

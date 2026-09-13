@@ -1,6 +1,6 @@
 # Verification Guide
 
-This guide verifies the current Phase 1, Phase 2, and Phase 3 implementation on Windows using PowerShell and local PostgreSQL/PostGIS.
+This guide verifies the current Phase 1 through Phase 5 implementation on Windows using PowerShell and local PostgreSQL/PostGIS.
 
 ## 1. Open The Project
 
@@ -15,13 +15,13 @@ git status --short --branch
 git log --oneline --max-count=4
 ```
 
-The latest committed checkpoint should be:
+The latest committed checkpoint before the current changes is:
 
 ```text
-dc7eced Complete Phase 2 project file workflow
+c29a94b Complete Phase 3 extraction pipeline
 ```
 
-The current TIFF and Phase 3 changes may be uncommitted until reviewed.
+The current Phase 4 and Phase 5 changes may be uncommitted until reviewed.
 
 ## 2. Run Automated Checks
 
@@ -43,7 +43,7 @@ Expected results:
 - Next.js production build succeeds
 - Backend tests pass
 
-The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, and TIFF extraction.
+The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF extraction, site-model geometry, and deterministic calculations.
 
 ## 3. Verify PostgreSQL/PostGIS
 
@@ -92,7 +92,7 @@ uv run alembic current
 Expected:
 
 ```text
-0003_add_extracted_documents (head)
+0005_add_calculation_results (head)
 ```
 
 Return to the project root:
@@ -266,7 +266,48 @@ Invoke-RestMethod `
   -Method Post | Out-Null
 ```
 
-## 8. Review Before Commit
+## 8. Test Site-Model Revisions And Calculations
+
+After processing a file, accept it into a site-model revision:
+
+```powershell
+$revision = Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/projects/$($project.id)/site-model/revisions/from-extraction/$($upload.id)" `
+  -Method Post
+
+$revision | Format-List
+```
+
+Read the revision entities:
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/projects/$($project.id)/site-model/revisions/$($revision.id)/entities" |
+  ConvertTo-Json -Depth 8
+```
+
+Run a deterministic slope calculation:
+
+```powershell
+$calculation = Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/projects/$($project.id)/calculations" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"calculation_type":"slope","inputs":{"start_elevation":100,"end_elevation":104,"horizontal_distance":100},"unit":"ft"}'
+
+$calculation | Format-List
+```
+
+Expected:
+
+```text
+result : 4
+unit   : percent
+```
+
+The calculation response also includes its formula, inputs, assumptions, and optional source/revision references.
+
+## 9. Review Before Commit
 
 Stop the frontend and backend terminals with `Ctrl+C`, then from the project root run:
 
@@ -288,10 +329,11 @@ git diff --cached
 
 Do not commit generated local data, `.env`, uploads, or secrets.
 
-## 9. Current Scope Limitations
+## 10. Current Scope Limitations
 
 - TIFF/TIF metadata is supported; TIFF OCR is deferred.
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
+- Elevation lookup and elevation statistics are not yet implemented.
 - Authentication is not yet enabled for the local single-user workflow.
 - The real PostgreSQL migration is verified locally, but the application still requires PostgreSQL/PostGIS to be running for database-backed API checks.

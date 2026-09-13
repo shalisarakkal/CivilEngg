@@ -51,6 +51,9 @@ class Project(Base):
     revisions: Mapped[list["ProjectRevision"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    calculations: Mapped[list["CalculationResult"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
 
 class SourceFile(Base):
@@ -135,3 +138,47 @@ class ProjectRevision(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="revisions")
+    entities: Mapped[list["SiteModelEntity"]] = relationship(
+        back_populates="revision", cascade="all, delete-orphan"
+    )
+
+
+class SiteModelEntity(Base):
+    __tablename__ = "site_model_entities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    revision_id: Mapped[str] = mapped_column(
+        ForeignKey("project_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    geometry: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    properties: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    elevation: Mapped[float | None] = mapped_column()
+    source_reference: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    confidence: Mapped[float | None] = mapped_column()
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="valid")
+
+    revision: Mapped[ProjectRevision] = relationship(back_populates="entities")
+
+
+class CalculationResult(Base):
+    __tablename__ = "calculation_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("project_revisions.id", ondelete="SET NULL")
+    )
+    calculation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_entity_ids: Mapped[list[Any] | None] = mapped_column(JSON)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    formula: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[float] = mapped_column(nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    assumptions: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="calculations")
