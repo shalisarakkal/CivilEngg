@@ -5,7 +5,7 @@ This document outlines the complete technical architecture required to build a m
 ## Core Use Cases
 •	Structural and civil calculations (beams, columns, stormwater, earthwork)
 •	GIS and mapping (parcels, contours, utilities, flood zones)
-•	Document upload and processing (PDFs, DWGs, reports)
+•	Document upload and processing (PDFs, DWGs, TIFF/TIF images, reports)
 •	AI-assisted analysis and report generation
 •	Project and client management
 
@@ -51,6 +51,7 @@ This document outlines the complete technical architecture required to build a m
 	•	AWS S3 – Scalable storage for engineering documents , but we will be using local storage
 ### File Types
 	•	PDFs (reports, surveys, plan sets)
+	•	TIFF/TIF raster plan and survey images
 	•	DWG/DXF drawings
 	•	Images and generated reports
 

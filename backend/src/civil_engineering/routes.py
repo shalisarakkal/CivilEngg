@@ -7,11 +7,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from civil_engineering.database import get_db
-from civil_engineering.models import Client, ProcessingJob, Project, SourceFile
+from civil_engineering.extraction import ExtractionError, parse_file
+from civil_engineering.models import (
+    Client,
+    ExtractedDocument,
+    ProcessingJob,
+    Project,
+    SourceFile,
+    new_id,
+)
 from civil_engineering.schemas import (
     ClientCreate,
     ClientResponse,
     ClientUpdate,
+    ExtractedDocumentResponse,
     ProcessingJobResponse,
     ProjectCreate,
     ProjectResponse,
@@ -136,6 +145,7 @@ async def upload_file(
 ) -> SourceFile:
     project = get_project_or_404(project_id, database)
     source_file = SourceFile(
+        id=new_id(),
         project_id=project.id,
         original_name=Path(file.filename or "").name,
         stored_path="",
@@ -220,9 +230,37 @@ def process_file(
     source_file = database.scalar(statement)
     if source_file is None:
         raise HTTPException(status_code=404, detail="File not found")
-    job = ProcessingJob(project_id=project_id, source_file_id=file_id, status="queued")
+    job = ProcessingJob(
+        project_id=project_id,
+        source_file_id=file_id,
+        status="processing",
+        parser_name=Path(source_file.stored_path).suffix.lower().lstrip("."),
+        started_at=datetime.now(timezone.utc),
+    )
     database.add(job)
-    source_file.status = "queued"
+    source_file.status = "processing"
+    database.commit()
+    try:
+        normalized = parse_file(Path(source_file.stored_path), source_file.original_name)
+        extraction = ExtractedDocument(
+            processing_job_id=job.id,
+            source_file_id=file_id,
+            parser_name=normalized.parser_name,
+            content=normalized.as_dict(),
+            warnings=normalized.warnings,
+        )
+        database.add(extraction)
+        job.status = "completed"
+        job.completed_at = datetime.now(timezone.utc)
+        job.warnings = normalized.warnings
+        source_file.status = "completed"
+        source_file.processed_at = job.completed_at
+    except (ExtractionError, OSError) as error:
+        job.status = "failed"
+        job.completed_at = datetime.now(timezone.utc)
+        job.error_message = str(error)
+        source_file.status = "failed"
+        source_file.error_message = str(error)
     database.commit()
     database.refresh(job)
     return job
@@ -249,3 +287,26 @@ def read_processing_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Processing job not found")
     return job
+
+
+@router.get(
+    "/projects/{project_id}/files/{file_id}/extraction",
+    response_model=ExtractedDocumentResponse,
+)
+def read_extraction(
+    project_id: str, file_id: str, database: Session = Depends(get_db)
+) -> ExtractedDocument:
+    get_project_or_404(project_id, database)
+    source_file = database.scalar(
+        select(SourceFile).where(SourceFile.id == file_id, SourceFile.project_id == project_id)
+    )
+    if source_file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    extraction = database.scalar(
+        select(ExtractedDocument)
+        .where(ExtractedDocument.source_file_id == file_id)
+        .order_by(ExtractedDocument.revision_number.desc())
+    )
+    if extraction is None:
+        raise HTTPException(status_code=404, detail="Extraction not found")
+    return extraction

@@ -4,7 +4,7 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project has a working Phase 1 foundation and a Phase 2 project/file workflow. The next implementation slice is document normalization and extraction:
+The project has working Phase 1, Phase 2, and Phase 3 foundations. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. The next implementation slice is coordinate-aware site-model construction:
 
 1. Create a project.
 2. Upload a supported file.
@@ -23,6 +23,7 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 - [DATA_MODEL.md](DATA_MODEL.md) - initial entities and relationships
 - [API.md](API.md) - initial API contract
 - [TESTING.md](TESTING.md) - testing strategy
+- [VERIFY.md](VERIFY.md) - manual verification runbook
 - [DECISIONS.md](DECISIONS.md) - recorded technical decisions
 - [CHANGELOG.md](CHANGELOG.md) - notable project changes
 

@@ -57,7 +57,10 @@ export default function ProjectWorkspace() {
 
   async function createProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!projectName.trim()) return;
+    if (!projectName.trim()) {
+      setMessage("Enter a project name first.");
+      return;
+    }
     setLoading(true);
     const response = await fetch(`${apiUrl}/projects`, {
       method: "POST",
@@ -107,10 +110,11 @@ export default function ProjectWorkspace() {
       { method: "POST" },
     );
     if (response.ok) {
+      const job: { status: string } = await response.json();
       setFiles((current) =>
-        current.map((item) => (item.id === file.id ? { ...item, status: "queued" } : item)),
+        current.map((item) => (item.id === file.id ? { ...item, status: job.status } : item)),
       );
-      setMessage(`${file.original_name} is queued for processing.`);
+      setMessage(`${file.original_name} processing status: ${job.status}.`);
     }
   }
 
@@ -137,7 +141,7 @@ export default function ProjectWorkspace() {
                 placeholder="Oak Street Site"
                 maxLength={200}
               />
-              <button type="submit" disabled={loading || !projectName.trim()} aria-label="Create project">
+              <button type="submit" disabled={loading} aria-label="Create project">
                 +
               </button>
             </div>
@@ -171,7 +175,7 @@ export default function ProjectWorkspace() {
                 <div>
                   <p className="eyebrow">Source files</p>
                   <h3>Bring the plan into focus.</h3>
-                  <p className="muted">PDF, DXF, CSV, and TXT files up to 50 MB.</p>
+                  <p className="muted">PDF, DXF, CSV, TXT, and TIFF files up to 50 MB.</p>
                 </div>
                 <form className="upload-form" onSubmit={uploadFile}>
                   <label className="file-picker" htmlFor="source-file">
@@ -179,7 +183,7 @@ export default function ProjectWorkspace() {
                     <input
                       id="source-file"
                       type="file"
-                      accept=".pdf,.dxf,.csv,.txt"
+                      accept=".pdf,.dxf,.csv,.txt,.tif,.tiff"
                       onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
                     />
                   </label>

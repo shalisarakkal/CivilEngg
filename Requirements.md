@@ -14,6 +14,8 @@ DWG/DXF (Civil 3D, standard CAD)
 
 2D PDF plan sets (site, grading, utility, drainage, profiles)
 
+TIFF/TIF raster plan and survey images
+
 Survey reports (PDF, DOCX, TXT), CSV point files, LandXML
 
 ### Modules:
@@ -23,6 +25,8 @@ File normalizer: converts everything to a common internal format.
 CAD parser: reads layers, blocks, polylines, text, dimensions, COGO points.
 
 PDF plan reader: uses vision+OCR to detect title blocks, viewports, callouts, dimensions.
+
+Raster image reader: records TIFF/TIF image metadata and provides the source for future OCR and vision extraction.
 
 Text document parser: extracts narrative, tables, and key phrases (e.g., “setback”, “finished floor elevation”).
 

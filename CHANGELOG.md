@@ -13,6 +13,9 @@ All notable project changes will be recorded here. Entries should describe user-
 - Local PDF, DXF, CSV, and TXT upload storage with size/type validation and SHA-256 duplicate detection.
 - Source-file download, deletion, and queued processing-job API workflows.
 - Project/file workspace UI and PostgreSQL-backed Phase 2 smoke-test coverage.
+- Normalized TXT, CSV, PDF, and DXF extraction with source references and warnings.
+- Versioned extracted-document storage and completed/failed processing statuses.
+- TIFF/TIF upload support with raster metadata extraction; OCR remains deferred.
 
 ### Planned
 

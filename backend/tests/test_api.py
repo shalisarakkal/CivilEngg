@@ -62,11 +62,14 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
 
         queued = client.post(f"/projects/{project_id}/files/{file_data['id']}/process")
         assert queued.status_code == 201
-        assert queued.json()["status"] == "queued"
+        assert queued.json()["status"] == "completed"
         assert (
             client.get(f"/projects/{project_id}/processing/{queued.json()['id']}").status_code
             == 200
         )
+        extraction = client.get(f"/projects/{project_id}/files/{file_data['id']}/extraction")
+        assert extraction.status_code == 200
+        assert extraction.json()["parser_name"] == "text"
 
         archived = client.post(f"/projects/{project_id}/archive")
         assert archived.status_code == 200

@@ -11,9 +11,9 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 ### Included in the MVP
 
 - Project and client records
-- Local upload and storage of PDF, DXF, CSV, TXT, and supported document files
+- Local upload and storage of PDF, DXF, CSV, TXT, TIFF/TIF, and supported document files
 - File metadata, processing status, and processing errors
-- PDF/text extraction and a basic DXF ingestion path
+- PDF/text extraction, TIFF/TIF raster metadata extraction, and a basic DXF ingestion path
 - A normalized project coordinate system and site model
 - Property boundaries, building footprints, points, elevations, and annotations where available
 - Distance, elevation, and slope calculations
@@ -53,7 +53,7 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 **Work items:**
 
 - [ ] Choose the first engineering workflow: site-plan measurement and question answering
-- [ ] Confirm supported MVP file types: PDF, DXF, CSV, TXT, and optionally DOCX
+- [ ] Confirm supported MVP file types: PDF, DXF, CSV, TXT, TIFF/TIF, and optionally DOCX
 - [ ] Define supported units and conversion rules, including feet, inches, meters, and percentages
 - [ ] Define the initial site-model entities and their source references
 - [ ] Document handling expectations for unsupported, corrupt, password-protected, or oversized files
@@ -117,23 +117,24 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 **Work items:**
 
-- [ ] Define a common internal document and geometry representation
-- [ ] Implement PDF text extraction and page metadata extraction
-- [ ] Implement TXT and CSV parsing with encoding and delimiter handling
-- [ ] Implement the initial DXF parser for layers, lines, polylines, text, points, and dimensions where available
+- [x] Define a common internal document and geometry representation
+- [x] Implement PDF text extraction and page metadata extraction
+- [x] Implement TIFF/TIF raster metadata extraction; defer OCR to a later vision phase
+- [x] Implement TXT and CSV parsing with encoding and delimiter handling
+- [x] Implement the initial DXF parser for layers, lines, polylines, text, points, and dimensions where available
 - [ ] Add optional DOCX parsing if it is required by the sample files
-- [ ] Preserve source file, page, layer, entity, and bounding-box references
-- [ ] Record parser warnings rather than silently dropping unsupported content
-- [ ] Add a processing-job interface so extraction can later run asynchronously
-- [ ] Store normalized extraction output in a versioned form
+- [x] Preserve source file, page, layer, entity, and bounding-box references
+- [x] Record parser warnings rather than silently dropping unsupported content
+- [x] Add a processing-job interface so extraction can later run asynchronously
+- [x] Store normalized extraction output in a versioned form
 
 **Exit criteria:**
 
-- [ ] Representative sample files can be processed through the pipeline
-- [ ] Extracted text and geometry can be traced to the source file
-- [ ] Parser failures are isolated to the affected file and reported
-- [ ] Unit tests cover normal files, malformed input, empty input, and unsupported entities
-- [ ] At least one PDF and one DXF fixture are checked into the test strategy without exposing confidential project data
+- [x] Representative sample files can be processed through the pipeline
+- [x] Extracted text and geometry can be traced to the source file
+- [x] Parser failures are isolated to the affected file and reported
+- [x] Unit tests cover normal files, malformed input, empty input, unsupported entities, and raster metadata
+- [x] At least one PDF and one DXF fixture are checked into the test strategy without exposing confidential project data
 
 ### Phase 4 - Coordinate System and Site Model
 
@@ -346,7 +347,7 @@ These are logical boundaries; exact routes and schemas should be finalized durin
 ## 7. MVP Definition of Done
 
 - [ ] A user can create a project
-- [ ] A user can upload a supported PDF, DXF, CSV, or TXT file
+- [ ] A user can upload a supported PDF, DXF, CSV, TXT, or TIFF/TIF file
 - [ ] The application processes the file and displays status and warnings
 - [ ] Extracted geometry and text are available in the project site model
 - [ ] A user can view the project geometry on a map or drawing surface

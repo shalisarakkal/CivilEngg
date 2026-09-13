@@ -97,6 +97,28 @@ class ProcessingJob(Base):
 
     project: Mapped[Project] = relationship(back_populates="processing_jobs")
     source_file: Mapped[SourceFile] = relationship(back_populates="processing_jobs")
+    extraction: Mapped["ExtractedDocument | None"] = relationship(
+        back_populates="processing_job", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class ExtractedDocument(Base):
+    __tablename__ = "extracted_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    processing_job_id: Mapped[str] = mapped_column(
+        ForeignKey("processing_jobs.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    source_file_id: Mapped[str] = mapped_column(
+        ForeignKey("source_files.id", ondelete="CASCADE"), nullable=False
+    )
+    revision_number: Mapped[int] = mapped_column(nullable=False, default=1)
+    parser_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    warnings: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    processing_job: Mapped[ProcessingJob] = relationship(back_populates="extraction")
 
 
 class ProjectRevision(Base):

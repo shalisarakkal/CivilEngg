@@ -78,3 +78,16 @@ class ProcessingJobResponse(BaseModel):
     completed_at: datetime | None
     warnings: list[object] | None
     error_message: str | None
+
+
+class ExtractedDocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    processing_job_id: str
+    source_file_id: str
+    revision_number: int
+    parser_name: str
+    content: dict[str, object]
+    warnings: list[object] | None
+    created_at: datetime

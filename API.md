@@ -41,10 +41,11 @@ Client and project routes are available without authentication in the current lo
 - `GET /projects/{project_id}/files/{file_id}` - retrieve file metadata
 - `GET /projects/{project_id}/files/{file_id}/download` - download a permitted file
 - `POST /projects/{project_id}/files/{file_id}/process` - start or retry processing
+- `GET /projects/{project_id}/files/{file_id}/extraction` - retrieve the latest normalized extraction
 - `GET /projects/{project_id}/processing` - list processing jobs
 - `GET /projects/{project_id}/processing/{job_id}` - retrieve job status and warnings
 
-Supported upload extensions are `.pdf`, `.dxf`, `.csv`, and `.txt`. Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`.
+Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, and `.tiff`. Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`. Processing currently runs synchronously and records `processing`, `completed`, or `failed` status. TIFF/TIF processing records raster metadata and reports that OCR is not enabled; asynchronous execution remains a later optimization.
 
 ## Site Model
 

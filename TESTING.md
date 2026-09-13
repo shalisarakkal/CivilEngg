@@ -11,7 +11,7 @@ Verify that source data is processed predictably, engineering calculations are r
 Cover:
 
 - File type and metadata validation
-- PDF, CSV, TXT, and DXF parsing
+- PDF, CSV, TXT, DXF, and TIFF/TIF parsing
 - Normalization and unit conversion
 - Coordinate transformations
 - Geometry validation
