@@ -7,6 +7,7 @@ from pypdf import PdfWriter
 
 from civil_engineering.extraction import (
     ExtractionError,
+    _bearing_to_azimuth,
     _key_phrase_items,
     parse_csv,
     parse_dxf,
@@ -195,6 +196,43 @@ def test_parse_file_dispatches_landxml_by_extension(tmp_path: Path) -> None:
     document = parse_file(path, "site.xml")
     assert document.parser_name == "landxml"
     assert document.items[0].value["point"] == [20.0, 10.0, 30.0]
+
+
+def test_bearing_to_azimuth_covers_all_quadrants() -> None:
+    assert _bearing_to_azimuth("N45.00E") == pytest.approx(45.0)
+    assert _bearing_to_azimuth("S45.00E") == pytest.approx(135.0)
+    assert _bearing_to_azimuth("S45.00W") == pytest.approx(225.0)
+    assert _bearing_to_azimuth("N45.00W") == pytest.approx(315.0)
+    assert _bearing_to_azimuth("N45-30-00E") == pytest.approx(45.5)
+    assert _bearing_to_azimuth("not a bearing") is None
+    assert _bearing_to_azimuth("N95.00E") is None  # out of the 0-90 degree range
+
+
+def test_csv_parser_chains_bearing_distance_courses_from_a_starting_point() -> None:
+    document = parse_csv(
+        b"point_id,x,y,bearing,distance\n1,1000,5000,,\n2,,,N90.00E,100.00\n3,,,N45.00E,50.00\n",
+        "boundary.csv",
+    )
+    courses = [item for item in document.items if item.item_type == "cogo_line"]
+    assert len(courses) == 2
+
+    first = courses[0].value
+    assert first["start"] == [1000.0, 5000.0]
+    assert first["end"] == pytest.approx([1100.0, 5000.0])
+    assert first["bearing"] == "N90.00E"
+    assert first["distance"] == 100.0
+
+    second = courses[1].value
+    assert second["start"] == pytest.approx([1100.0, 5000.0])
+    assert second["end"] == pytest.approx([1135.35534, 5035.35534], abs=1e-4)
+
+
+def test_csv_parser_ignores_invalid_or_incomplete_courses() -> None:
+    document = parse_csv(
+        b"x,y,bearing,distance\n0,0,,\n,,gibberish,10\n,,N45.00E,\n",
+        "invalid.csv",
+    )
+    assert [item for item in document.items if item.item_type == "cogo_line"] == []
 
 
 def test_parser_rejects_unsupported_or_malformed_input(tmp_path: Path) -> None:

@@ -337,6 +337,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - LandXML parsing (Phase 9) covers `CgPoints`, surface `Pnts`/`P` points, and straight alignment `Line` segments; curved (`Curve`/`Spiral`) alignment segments and surface triangulation (`Faces`) are not extracted. The parser assumes the common "northing easting [elevation]" coordinate order (see RISK_REGISTER.md); a producer using the reverse order would silently swap X/Y.
 - Label-to-geometry proximity linking (Phase 9) only covers DXF `TEXT` labels today, since those are the only extracted items that carry a per-label coordinate; it uses a fixed 10-unit distance cutoff that is not aware of the project's coordinate units (see RISK_REGISTER.md).
 - Key-phrase extraction (Phase 9) scans `.txt` narrative lines and PDF page text against a fixed vocabulary of civil-engineering terms (`KEY_PHRASES` in extraction.py); it does not scan DXF/CSV/LandXML input (not narrative text) and will miss any relevant term not in that list (see RISK_REGISTER.md).
+- COGO bearing/distance parsing (Phase 9) only covers CSV input with a point of beginning (x/y or easting/northing) and quadrant bearing/distance columns (e.g. `N45.00E`, `100.00`); DXF/LandXML bearing annotations are not parsed into geometry (see RISK_REGISTER.md).
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.

@@ -1,5 +1,6 @@
 import csv
 import io
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -222,7 +223,99 @@ def parse_csv(data: bytes, file_name: str) -> NormalizedDocument:
         NormalizedItem("table_row", row, SourceReference(file_name=file_name, entity_id=str(index)))
         for index, row in enumerate(rows, start=2)
     ]
+    document.items.extend(_cogo_course_items(rows, file_name))
     return document
+
+
+def _row_value(row: dict[str, str], names: tuple[str, ...]) -> float | None:
+    for key, value in row.items():
+        if key.strip().lower() in names:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _row_point(row: dict[str, str]) -> list[float] | None:
+    x = _row_value(row, ("x", "easting", "longitude", "lon"))
+    y = _row_value(row, ("y", "northing", "latitude", "lat"))
+    return [x, y] if x is not None and y is not None else None
+
+
+def _row_text(row: dict[str, str], names: tuple[str, ...]) -> str | None:
+    for key, value in row.items():
+        if key.strip().lower() in names and value.strip():
+            return value.strip()
+    return None
+
+
+# Quadrant bearing, e.g. "N45.00E", "N 45 30 00 E", or "N45°30'00\"E" (degrees,
+# optional minutes, optional seconds, both quadrant letters required).
+_BEARING_PATTERN = re.compile(
+    r"^([NSns])\s*(\d+(?:\.\d+)?)(?:[^0-9EWew]+(\d+(?:\.\d+)?))?"
+    r"(?:[^0-9EWew]+(\d+(?:\.\d+)?))?\s*[^0-9EWew]*([EWew])$"
+)
+
+
+def _bearing_to_azimuth(text: str) -> float | None:
+    match = _BEARING_PATTERN.match(text.strip())
+    if match is None:
+        return None
+    north_south, degrees_text, minutes_text, seconds_text, east_west = match.groups()
+    degrees = float(degrees_text) + float(minutes_text or 0) / 60 + float(seconds_text or 0) / 3600
+    if not (0 <= degrees <= 90):
+        return None
+    quadrant = (north_south.upper(), east_west.upper())
+    if quadrant == ("N", "E"):
+        return degrees
+    if quadrant == ("S", "E"):
+        return 180 - degrees
+    if quadrant == ("S", "W"):
+        return 180 + degrees
+    return 360 - degrees  # ("N", "W")
+
+
+def _project_point(start: list[float], azimuth_degrees: float, distance: float) -> list[float]:
+    azimuth_radians = math.radians(azimuth_degrees)
+    return [
+        start[0] + distance * math.sin(azimuth_radians),
+        start[1] + distance * math.cos(azimuth_radians),
+    ]
+
+
+def _cogo_course_items(rows: list[dict[str, str]], file_name: str) -> list[NormalizedItem]:
+    """Chain quadrant bearing/distance courses into boundary-segment lines.
+
+    Each row either sets the current reference point (an explicit x/y or
+    easting/northing pair, e.g. a point of beginning) or, given a bearing and
+    distance from that reference point, derives the next point and emits a
+    line segment for that course. Rows with neither are ignored.
+    """
+    items: list[NormalizedItem] = []
+    current: list[float] | None = None
+    for index, row in enumerate(rows, start=2):
+        point = _row_point(row)
+        if point is not None:
+            current = point
+            continue
+        bearing_text = _row_text(row, ("bearing", "course", "brg"))
+        distance = _row_value(row, ("distance", "dist", "length"))
+        if bearing_text is None or distance is None or current is None:
+            continue
+        azimuth = _bearing_to_azimuth(bearing_text)
+        if azimuth is None:
+            continue
+        end = _project_point(current, azimuth, distance)
+        items.append(
+            NormalizedItem(
+                "cogo_line",
+                {"start": current, "end": end, "bearing": bearing_text, "distance": distance},
+                SourceReference(file_name=file_name, entity_id=str(index)),
+            )
+        )
+        current = end
+    return items
 
 
 def parse_pdf(data: bytes, file_name: str) -> NormalizedDocument:
