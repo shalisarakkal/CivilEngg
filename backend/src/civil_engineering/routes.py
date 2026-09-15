@@ -470,7 +470,7 @@ def create_site_model_revision(
             if point is None:
                 table_rows.append(value)
                 continue
-            value = {"point": point}
+            value = {**value, "point": point}
             item_type = "point"
         geometry = None
         validation_status = "unmapped"
@@ -488,7 +488,7 @@ def create_site_model_revision(
             revision_id=revision.id,
             entity_type=item_type,
             geometry=geometry,
-            properties=value if isinstance(value, dict) else {"value": value},
+            properties=_classify_entity(value, item.get("source")),
             source_reference=item.get("source"),
             validation_status=validation_status,
         )
@@ -531,6 +531,50 @@ def create_site_model_revision(
     database.commit()
     database.refresh(revision)
     return revision
+
+
+# Keyword vocabulary for semantic entity classification, matched against a DXF layer
+# name or an explicit CSV type/classification column (see RISK_REGISTER.md: inference
+# only from these signals, never guessed from geometry shape alone).
+PARCEL_TYPE_KEYWORDS = ("parcel", "property", "boundary")
+BUILDING_TYPE_KEYWORDS = ("building", "footprint", "structure")
+DRIVEWAY_TYPE_KEYWORDS = ("driveway", "drive", "road", "street", "access")
+CURB_CUT_TYPE_KEYWORDS = ("curb cut", "curbcut")
+
+
+def _semantic_type_from_text(text: str) -> str | None:
+    lowered = text.lower()
+    if any(keyword in lowered for keyword in CURB_CUT_TYPE_KEYWORDS):
+        return "curb_cut"
+    if any(keyword in lowered for keyword in PARCEL_TYPE_KEYWORDS):
+        return "parcel_boundary"
+    if any(keyword in lowered for keyword in BUILDING_TYPE_KEYWORDS):
+        return "building_footprint"
+    if any(keyword in lowered for keyword in DRIVEWAY_TYPE_KEYWORDS):
+        return "driveway_road"
+    return None
+
+
+def _classify_entity(value: Any, source: dict[str, Any] | None) -> dict[str, Any]:
+    properties = dict(value) if isinstance(value, dict) else {"value": value}
+    candidates: list[str] = []
+    if source and source.get("layer"):
+        candidates.append(str(source["layer"]))
+    if isinstance(value, dict):
+        for key in ("type", "classification", "category"):
+            if value.get(key):
+                candidates.append(str(value[key]))
+    for candidate in candidates:
+        semantic_type = _semantic_type_from_text(candidate)
+        if semantic_type is not None:
+            properties["semantic_type"] = semantic_type
+            break
+    if isinstance(value, dict):
+        for key in ("zoning", "zone"):
+            if value.get(key):
+                properties["zoning"] = value[key]
+                break
+    return properties
 
 
 # Fixed coordinate-unit cutoff for label-to-geometry proximity linking, matching the

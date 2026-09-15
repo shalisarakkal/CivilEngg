@@ -275,7 +275,7 @@ Phase 6 lifecycle additions:
 - [x] Link extracted text labels (e.g. "FF=102.50", "Top of curb 101.80") to nearby geometry by spatial proximity, and preserve that link as a source reference
 - [x] Extract key phrases from narrative text (e.g. "setback", "finished floor elevation") during document parsing and surface them as searchable site-model annotations, rather than only matching keywords in the user's question
 - [x] Parse bearing/distance (COGO) values for parcel boundary segments where present in DXF/CSV/LandXML input, in addition to the raw coordinates already extracted
-- [ ] Add semantic site-model entity classification (parcel boundary, building footprint, driveway/road, curb cut) with optional zoning tags, beyond today's generic point/line/polygon/text typing
+- [x] Add semantic site-model entity classification (parcel boundary, building footprint, driveway/road, curb cut) with optional zoning tags, beyond today's generic point/line/polygon/text typing
 - [ ] Support directional/targeted questions (e.g. "distance to the north property line") by resolving a named entity role and direction, instead of always picking whichever two mapped geometries exist
 - [ ] Generate an annotated snippet/screenshot of the source plan sheet with the relevant geometry highlighted, in addition to the existing in-app schematic highlight
 
@@ -285,7 +285,7 @@ Phase 6 lifecycle additions:
 - [x] At least one extracted label is correctly linked to its nearest geometry entity with a traceable source reference
 - [x] Key phrases extracted from a sample document are retrievable and shown in the UI
 - [x] At least one parcel boundary case demonstrates bearing/distance-derived geometry alongside raw coordinates
-- [ ] Site-model entities can carry a semantic type (parcel/building/driveway/etc.) and it is visible in the UI
+- [x] Site-model entities can carry a semantic type (parcel/building/driveway/etc.) and it is visible in the UI
 - [ ] A directional question ("north property line") returns a different, correct answer than a generic nearest-geometry query
 - [ ] A question or calculation result can produce an annotated image/snippet of the source plan sheet, not just the in-app schematic view
 
