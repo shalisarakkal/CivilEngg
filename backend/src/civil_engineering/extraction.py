@@ -49,6 +49,51 @@ class ExtractionError(ValueError):
     pass
 
 
+# Civil-engineering terms worth surfacing as searchable annotations when they appear in
+# narrative text, drawn from Requirements.md's own examples ("setback", "finished floor
+# elevation") plus closely related terms used elsewhere in this app (ai_service.py's
+# drainage/utility keyword summaries, RISK_REGISTER.md's setback/slope attention flags).
+KEY_PHRASES = (
+    "setback",
+    "finished floor elevation",
+    "property line",
+    "right-of-way",
+    "easement",
+    "zoning",
+    "curb cut",
+    "top of curb",
+    "detention",
+    "retention",
+    "drainage",
+    "grading",
+    "utility",
+)
+
+
+def _find_key_phrases(text: str) -> list[str]:
+    lowered = text.lower()
+    return [phrase for phrase in KEY_PHRASES if re.search(rf"\b{re.escape(phrase)}\b", lowered)]
+
+
+def _key_phrase_items(
+    lines: list[str], file_name: str, page: int | None = None
+) -> list[NormalizedItem]:
+    items: list[NormalizedItem] = []
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for phrase in _find_key_phrases(stripped):
+            items.append(
+                NormalizedItem(
+                    "key_phrase",
+                    {"phrase": phrase, "context": stripped},
+                    SourceReference(file_name=file_name, page=page, entity_id=str(index)),
+                )
+            )
+    return items
+
+
 def parse_file(path: Path, original_name: str | None = None) -> NormalizedDocument:
     suffix = path.suffix.lower()
     source_name = original_name or path.name
@@ -81,6 +126,7 @@ def parse_text(data: bytes, file_name: str) -> NormalizedDocument:
         for index, line in enumerate(document.text, start=1)
         if line.strip()
     ]
+    document.items.extend(_key_phrase_items(document.text, file_name))
     return document
 
 
@@ -198,6 +244,7 @@ def parse_pdf(data: bytes, file_name: str) -> NormalizedDocument:
                     "page_text", text, SourceReference(file_name=file_name, page=page_number)
                 )
             )
+            document.items.extend(_key_phrase_items(text.splitlines(), file_name, page=page_number))
     return document
 
 

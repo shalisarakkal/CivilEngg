@@ -7,6 +7,7 @@ from pypdf import PdfWriter
 
 from civil_engineering.extraction import (
     ExtractionError,
+    _key_phrase_items,
     parse_csv,
     parse_dxf,
     parse_file,
@@ -53,6 +54,36 @@ def test_single_space_numeric_txt_rows_are_points() -> None:
         "y": "1000.2",
         "elevation": "25.071",
     }
+
+
+def test_text_parser_extracts_key_phrases_from_narrative_lines() -> None:
+    document = parse_text(
+        b"The required setback is 25 feet from the property line.\n"
+        b"Finished Floor Elevation shown on the plan.\n"
+        b"This site is currently upgrading its access road.\n",
+        "notes.txt",
+    )
+    key_phrases = [item for item in document.items if item.item_type == "key_phrase"]
+    phrases_found = {item.value["phrase"] for item in key_phrases}
+    assert phrases_found == {"setback", "property line", "finished floor elevation"}
+    setback_item = next(item for item in key_phrases if item.value["phrase"] == "setback")
+    assert (
+        setback_item.value["context"] == "The required setback is 25 feet from the property line."
+    )
+    assert setback_item.source.file_name == "notes.txt"
+    # "upgrading" must not spuriously match the "grading" key phrase.
+    assert "grading" not in phrases_found
+
+
+def test_key_phrase_items_helper_attaches_page_reference() -> None:
+    items = _key_phrase_items(
+        ["A drainage easement runs along the rear property line.", "", "No key terms here."],
+        "plan.pdf",
+        page=3,
+    )
+    assert {item.value["phrase"] for item in items} == {"drainage", "easement", "property line"}
+    assert all(item.source.page == 3 for item in items)
+    assert all(item.source.file_name == "plan.pdf" for item in items)
 
 
 def test_pdf_parser_extracts_page_text(tmp_path: Path) -> None:
