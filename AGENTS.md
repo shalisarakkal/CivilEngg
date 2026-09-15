@@ -1,4 +1,7 @@
 # Civil Engineering Project Technical Architecture
+
+> **Note:** This is the original, pre-scoping technical vision for the full product — kept as a historical reference for the long-term direction, the same way Requirements.md is kept as the original ask. The MVP actually being built deliberately narrows this scope; see PLAN.md (phased scope and current status), ARCHITECTURE.md (as-built architecture), and DECISIONS.md (recorded decisions and why they diverge from this document) for what's true today. Notably: no map library, TailwindCSS, NumPy/SciPy/Pandas/GeoPandas, PostGIS-backed geometry, real LLM provider, authentication, billing, or monitoring/analytics tooling (Sentry/PostHog/Logtail) are implemented — see PLAN.md section 3 for the as-implemented stack.
+
 ## Overview
 This document outlines the complete technical architecture required to build a modern Civil Engineering web application capable of handling engineering calculations, GIS mapping, document processing, and AI-assisted workflows.
 

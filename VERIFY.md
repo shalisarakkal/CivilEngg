@@ -1,6 +1,6 @@
 # Verification Guide
 
-This guide verifies the current Phase 0 through Phase 6 implementation on Windows using PowerShell and local PostgreSQL/PostGIS.
+This guide verifies the current Phase 0 through Phase 9 implementation on Windows using PowerShell. Section 2 runs the automated suite against the isolated SQLite database used for local development, tests, and Playwright e2e runs — no PostgreSQL setup is required for this. Section 3 is an optional walkthrough for verifying a separately-configured local PostgreSQL/PostGIS instance, for anyone validating that production-style deployment path; it is not required for local development.
 
 ## 1. Open The Project
 
@@ -15,13 +15,7 @@ git status --short --branch
 git log --oneline --max-count=4
 ```
 
-The latest committed checkpoint is:
-
-```text
-e844f56 Complete Phase 0 through Phase 6 foundations
-```
-
-The repository should be clean before starting Phase 7.
+The working tree should be clean before starting a new verification pass.
 
 ## 2. Run Automated Checks
 
@@ -45,7 +39,9 @@ Expected results:
 
 The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF, LandXML extraction, site-model geometry, deterministic calculations, elevation statistics, and archive lifecycle behavior.
 
-## 3. Verify PostgreSQL/PostGIS
+## 3. Verify PostgreSQL/PostGIS (optional)
+
+This section is only relevant if you have a local PostgreSQL/PostGIS instance configured for a production-style deployment check. It is not part of the normal local development or test loop, which runs entirely on SQLite (Section 2).
 
 Check the Windows service:
 

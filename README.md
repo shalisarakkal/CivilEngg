@@ -30,18 +30,19 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 - [DECISIONS.md](DECISIONS.md) - recorded technical decisions
 - [CHANGELOG.md](CHANGELOG.md) - notable project changes
 
-## Planned Stack
+## Stack
 
-- Frontend: Next.js, React, and TailwindCSS
+- Frontend: Next.js, React, and plain CSS (no styling framework); a custom SVG schematic view rather than a map library
 - Backend: FastAPI and Python
-- Database: PostgreSQL with PostGIS
-- Engineering libraries: NumPy, SciPy, Pandas, Shapely, GeoPandas, and PyProj
+- Database: SQLite for local development, automated tests, and Playwright e2e runs. PostgreSQL/PostGIS support exists (driver dependency and migration) but isn't exercised by the normal dev/test workflow — see DATA_MODEL.md and VERIFY.md section 3
+- Engineering libraries: Shapely and PyProj
+- AI: a deterministic mock provider that never makes a network call; a real provider integration is deferred — see RISK_REGISTER.md
 - Local file storage for the initial deployment
 - Playwright and backend tests for verification
 
 ## Development
 
-Prerequisites: Node.js, npm, Python 3.12+, and `uv`. PostgreSQL with PostGIS will be required locally when database-backed features are implemented.
+Prerequisites: Node.js, npm, Python 3.12+, and `uv`. No database installation is required — the backend defaults to SQLite automatically, which is what local development, the test suite, and Playwright all use.
 
 ```powershell
 Copy-Item .env.example .env
@@ -51,7 +52,7 @@ npm run build
 npm test
 ```
 
-Run database migrations after PostgreSQL/PostGIS is available:
+If you're deliberately testing the PostgreSQL/PostGIS deployment path (see VERIFY.md section 3), point `DATABASE_URL` at it and run migrations:
 
 ```powershell
 cd backend
@@ -73,7 +74,7 @@ uv run uvicorn --app-dir src civil_engineering.main:app --reload
 
 The frontend runs at `http://localhost:3000` and the backend health endpoint is available at `http://localhost:8000/health`.
 
-Database-backed features will use a locally installed PostgreSQL/PostGIS service. The current health endpoint and tests do not require a running database.
+All database-backed features work out of the box against the default SQLite database; no separate database service needs to be running for local development or tests.
 
 Do not commit secrets. Use a local environment file based on `.env.example`.
 

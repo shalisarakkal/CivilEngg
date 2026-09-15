@@ -54,6 +54,4 @@ All notable project changes will be recorded here. Entries should describe user-
 
 ### Planned
 
-- Project scaffolding and local development commands.
-- Project, client, file, and processing-job models.
-- Initial document extraction and processing-state transitions.
+- Phase Z: freeze MVP scope, document deployment/backup/restore procedures, configure environment secrets, run a final smoke test, and publish a short user guide before release. See PLAN.md's Phase Z section for the full work-item list.

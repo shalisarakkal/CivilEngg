@@ -43,6 +43,9 @@
 - `uploaded_at`
 - `processed_at`
 - `error_message`
+- `deleted_at`
+- `archived_path`
+- `status_before_delete`
 
 ### ProcessingJob
 
@@ -55,6 +58,19 @@
 - `completed_at`
 - `warnings`
 - `error_message`
+
+### ExtractedDocument
+
+- `id`
+- `processing_job_id`
+- `source_file_id`
+- `revision_number`
+- `parser_name`
+- `content`
+- `warnings`
+- `created_at`
+
+`content` is the full normalized document (text, items, warnings, metadata) that a parser produced, stored as JSON. This is what `POST .../site-model/revisions/from-extraction/{file_id}` reads to build `SiteModelEntity` rows for a revision.
 
 ### ProjectRevision
 
@@ -79,7 +95,11 @@
 - `confidence`
 - `validation_status`
 
-Initial entity types include parcel, structure, road, driveway, utility, contour, point, elevation, annotation, and drainage path.
+`entity_type` is the geometric/structural kind an extraction produced: `point`, `line`, `text`, `table`, `key_phrase`, `cogo_line`, or a lowercased raw DXF entity type (e.g. `lwpolyline`, `dimension`). It is not a civil-engineering role.
+
+That role lives in `properties.semantic_type` instead, added in Phase 9: `parcel_boundary`, `building_footprint`, `driveway_road`, or `curb_cut`, inferred from a DXF layer name or an explicit CSV type/classification column (see RISK_REGISTER.md). `properties` also carries item-specific data depending on `entity_type` — a CSV/LandXML/DXF geometry's raw coordinates; `phrase`/`context` for a `key_phrase`; `bearing`/`distance` for a `cogo_line`; an optional `zoning` tag passed through from a CSV column; and, for a DXF label with a location, an optional `linked_geometry` object (target entity id, type, distance, and that target's own `source_reference`) recording a Phase 9 proximity link to nearby geometry.
+
+`confidence` exists on the column but is not currently set by any parser or acceptance path; it is always `null` today.
 
 ### CalculationResult
 
@@ -93,7 +113,18 @@ Initial entity types include parcel, structure, road, driveway, utility, contour
 - `result`
 - `unit`
 - `assumptions`
+- `details`
 - `created_at`
+
+### ProjectSummary
+
+- `id`
+- `project_id`
+- `revision_id`
+- `content`
+- `created_at`
+
+`content` is the structured summary returned by the AI provider (`summary`, `grading`, `drainage`, `utilities`, `attention_flags`, `limitations`), stored as JSON.
 
 ### QuestionAnswer
 
@@ -103,11 +134,9 @@ Initial entity types include parcel, structure, road, driveway, utility, contour
 - `question`
 - `intent`
 - `answer`
-- `calculation_result_id`
-- `source_references`
-- `limitations`
-- `provider`
 - `created_at`
+
+`answer` is the full response returned by the AI provider, stored as JSON — it includes the answer text, method, result/unit where applicable, `source_references`, `limitations`, and `confidence`. These are not separate columns.
 
 ## Relationships
 
@@ -115,16 +144,22 @@ Initial entity types include parcel, structure, road, driveway, utility, contour
 Client 1 -- many Project
 Project 1 -- many SourceFile
 SourceFile 1 -- many ProcessingJob
+ProcessingJob 1 -- 1 ExtractedDocument
 Project 1 -- many ProjectRevision
 ProjectRevision 1 -- many SiteModelEntity
 ProjectRevision 1 -- many CalculationResult
+ProjectRevision 1 -- many ProjectSummary
 ProjectRevision 1 -- many QuestionAnswer
 ```
 
+## Resolved Modeling Questions
+
+- **Geometry column type:** plain `JSON` (GeoJSON-like dicts), not a native PostGIS geometry/geography type; there are no spatial indexes. Spatial operations run in application code via Shapely, not in the database.
+- **Normalized extraction storage:** stored in the database, as `ExtractedDocument.content` (JSON), not in file storage.
+- **Confidence and validation-status values:** `validation_status` is one of `valid`, `invalid`, or `unmapped`. `confidence` is not currently populated by any parser or acceptance path (always `null`).
+- **Retention and deletion rules for source files:** archive (soft-delete, preserves checksum/metadata), restore, and permanent purge are implemented (Phase 6); see API.md's Files and Processing section.
+
 ## Open Modeling Questions
 
-- Final geometry column types and spatial indexes
-- Whether raw normalized extraction is stored in PostgreSQL or file storage
-- Exact confidence and validation-status values
-- Revision merge behavior when several files contribute to one site model
-- Retention and deletion rules for source files
+- Revision merge behavior when several files contribute to one site model (each revision today comes from exactly one extraction/file)
+- Supported coordinate reference systems, and whether a geographic (lat/lon) CRS should be rejected at calculation time (see RISK_REGISTER.md)

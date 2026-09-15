@@ -35,13 +35,15 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 
 ## 3. Technical Direction
 
-- **Frontend:** Next.js, React, TailwindCSS, and Leaflet or another compatible mapping library
+This was the direction proposed at Phase 0. As implemented, several choices were deliberately simplified for the MVP; see the note after each line and DECISIONS.md for the record.
+
+- **Frontend:** Next.js and React. *As implemented:* plain CSS instead of TailwindCSS, and a custom SVG schematic view instead of Leaflet/Mapbox — no map library was adopted (see DECISIONS.md).
 - **Backend:** FastAPI with Python engineering services
-- **Numerical and data processing:** NumPy, SciPy, Pandas, Shapely, GeoPandas, and PyProj as needed
-- **Database:** PostgreSQL with PostGIS for project, geometry, and revision data
+- **Numerical and data processing:** Shapely and PyProj. *As implemented:* NumPy, SciPy, Pandas, and GeoPandas are unused — no shipped calculation or extraction path needs them.
+- **Database:** PostgreSQL with PostGIS for project, geometry, and revision data. *As implemented:* local development, automated tests, and Playwright e2e all run on SQLite (`Base.metadata.create_all`). A `psycopg` driver and a PostGIS-enabling migration exist, but geometry is stored as plain JSON, not native PostGIS geometry types, and no PostGIS-specific feature is used.
 - **Local file storage:** A configurable local data directory, with file metadata stored in the database
-- **AI:** OpenAI API behind a provider interface, with source-grounded prompts and configurable credentials
-- **Testing:** Pytest for backend logic, frontend tests appropriate to the selected stack, and Playwright for end-to-end workflows
+- **AI:** OpenAI API behind a provider interface, with source-grounded prompts and configurable credentials. *As implemented:* the provider interface (`AIProvider`) exists, but the only implementation is a deterministic `MockAIProvider` that never makes a network call. Real OpenAI integration is deferred (see RISK_REGISTER.md).
+- **Testing:** Pytest for backend logic, `tsc`/`eslint` for the frontend, and Playwright for end-to-end workflows
 - **Development:** Local environment first; deployment adapters may target Vercel and Railway or another compatible platform later
 
 ## 4. Development Phases

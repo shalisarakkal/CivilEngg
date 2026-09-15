@@ -12,7 +12,7 @@ Next.js and React provide project management, uploads, processing status, map or
 
 ### API
 
-FastAPI exposes project, file, processing, site-model, calculation, summary, and question endpoints. The API validates inputs and coordinates the application services.
+FastAPI exposes project, file, processing, site-model (including a plan-sheet snippet endpoint for DXF-sourced entities), calculation, summary, and question endpoints. The API validates inputs and coordinates the application services. See API.md for the current route list.
 
 ### Processing Pipeline
 
@@ -34,8 +34,8 @@ The AI layer receives selected site-model data and source context. Computable qu
 
 ### Data and Storage
 
-- PostgreSQL stores application records, revisions, calculation results, and geometry.
-- PostGIS stores spatial data and supports geometry operations.
+- SQLite stores application records, revisions, calculation results, and geometry for local development, automated tests, and Playwright e2e runs. PostgreSQL is supported as an alternative (driver dependency and migrations exist) for anyone deliberately running that deployment path, but it isn't part of the normal dev/test workflow.
+- Geometry is stored as plain JSON (GeoJSON-like dicts), not native PostGIS geometry types; a PostGIS-enabling migration exists but no PostGIS-specific feature (spatial index, `ST_*` function) is used. All geometry operations run in application code via Shapely — see DATA_MODEL.md's Resolved Modeling Questions.
 - Local storage holds uploaded and generated files.
 - File metadata stores checksums, type, size, status, and source references.
 
@@ -46,7 +46,7 @@ User
   -> Frontend
   -> FastAPI API
   -> Project/File Services
-  -> Local Storage + PostgreSQL/PostGIS
+  -> Local Storage + SQLite (or PostgreSQL)
   -> Processing Pipeline
   -> Normalized Site Model
   -> Calculation and AI Services
