@@ -351,14 +351,14 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - Engineering calculation outputs have received a non-licensed technical review (see section 12) and automated hand-verified test coverage in `backend/tests/test_calculations.py`, but have not been reviewed by a licensed civil engineer. Treat calculation results as unverified for real engineering decisions until that review happens.
 - The real PostgreSQL migration is verified locally, but the application still requires PostgreSQL/PostGIS to be running for database-backed API checks. Automated tests run against an isolated SQLite database instead.
 
-## 11. Test Results Summary (as of Phase 8 hardening)
+## 11. Test Results Summary (as of Phase 9 completion)
 
-- Backend: `uv run pytest` — 58 tests passing (unit, API/integration, storage, processing-resilience, and operations/diagnostics tests), each using an isolated SQLite database and temporary storage directory.
+- Backend: `uv run pytest` — 81 tests passing (unit, API/integration, storage, processing-resilience, and operations/diagnostics tests), each using an isolated SQLite database and temporary storage directory.
 - Backend: `ruff check`, `ruff format --check`, and `mypy src` all pass cleanly.
 - Frontend: `npm run typecheck`, `npm run lint`, and `npm run build` all pass cleanly.
-- Frontend: `npm run test:e2e` (Playwright) — 6 tests passing:
+- Frontend: `npm run test:e2e` (Playwright) — 8 tests passing:
   - 4 component-level tests against a mocked API (upload, calculation, and two error states).
-  - 2 true end-to-end tests against a real backend, isolated SQLite database, and local storage directory, covering create project, upload, process, inspect, calculate, select-to-highlight, ask, and request-summary; plus a refusal case with no accepted revision.
+  - 4 true end-to-end tests against a real backend, isolated SQLite database, and local storage directory: the primary workflow (create project, upload, process, inspect, calculate, select-to-highlight, ask, request-summary) and its no-accepted-revision refusal case, plus the two Phase 9 UI additions (key-phrase entity cards from a narrative `.txt` upload, and semantic-type badges plus a plan-sheet snippet from a classified DXF upload).
 - Notable issues found and fixed while writing this coverage (see CHANGELOG.md for detail): a UI-stuck-on-network-failure bug in three form handlers, a missing status message on first-project-creation failure, a missing retry path for interrupted processing jobs, and a genuine race condition allowing concurrent duplicate uploads (fixed with a database-level unique constraint).
 
 ## 12. Calculation Engine Technical Review (Non-Licensed)
