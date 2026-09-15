@@ -335,6 +335,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 
 - TIFF/TIF metadata is supported; TIFF OCR is deferred.
 - LandXML parsing (Phase 9) covers `CgPoints`, surface `Pnts`/`P` points, and straight alignment `Line` segments; curved (`Curve`/`Spiral`) alignment segments and surface triangulation (`Faces`) are not extracted. The parser assumes the common "northing easting [elevation]" coordinate order (see RISK_REGISTER.md); a producer using the reverse order would silently swap X/Y.
+- Label-to-geometry proximity linking (Phase 9) only covers DXF `TEXT` labels today, since those are the only extracted items that carry a per-label coordinate; it uses a fixed 10-unit distance cutoff that is not aware of the project's coordinate units (see RISK_REGISTER.md).
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.

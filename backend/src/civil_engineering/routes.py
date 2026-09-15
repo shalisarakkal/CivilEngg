@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from shapely.geometry import Point, shape
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -456,6 +457,7 @@ def create_site_model_revision(
     table_rows: list[dict[str, Any]] = []
     text_lines: list[str] = []
     text_source: dict[str, Any] | None = None
+    created_entities: list[SiteModelEntity] = []
     for item in extraction.content.get("items", []):
         value = item.get("value", {})
         item_type = str(item.get("item_type", "unknown"))
@@ -491,6 +493,9 @@ def create_site_model_revision(
             validation_status=validation_status,
         )
         database.add(entity)
+        created_entities.append(entity)
+    database.flush()
+    _link_labels_to_nearby_geometry(created_entities)
     if text_lines:
         database.add(
             SiteModelEntity(
@@ -526,6 +531,43 @@ def create_site_model_revision(
     database.commit()
     database.refresh(revision)
     return revision
+
+
+# Fixed coordinate-unit cutoff for label-to-geometry proximity linking, matching the
+# unit-agnostic style of TIGHT_SETBACK_UNITS in ai_service.py (see RISK_REGISTER.md).
+LABEL_LINK_MAX_DISTANCE = 10.0
+
+
+def _link_labels_to_nearby_geometry(entities: list[SiteModelEntity]) -> None:
+    geometries = [
+        (entity, shape(entity.geometry))
+        for entity in entities
+        if entity.validation_status == "valid" and entity.geometry
+    ]
+    if not geometries:
+        return
+    for entity in entities:
+        if entity.entity_type != "text":
+            continue
+        location = (entity.properties or {}).get("location")
+        if not isinstance(location, list) or len(location) < 2:
+            continue
+        label_point = Point(location[0], location[1])
+        nearest_entity, nearest_distance = min(
+            ((candidate, label_point.distance(geometry)) for candidate, geometry in geometries),
+            key=lambda pair: pair[1],
+        )
+        if nearest_distance > LABEL_LINK_MAX_DISTANCE:
+            continue
+        entity.properties = {
+            **(entity.properties or {}),
+            "linked_geometry": {
+                "entity_id": nearest_entity.id,
+                "entity_type": nearest_entity.entity_type,
+                "distance": round(nearest_distance, 4),
+                "source_reference": nearest_entity.source_reference,
+            },
+        }
 
 
 def _table_row_point(row: dict[str, Any]) -> list[float] | None:
