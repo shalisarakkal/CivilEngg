@@ -222,23 +222,23 @@ Phase 6 lifecycle additions:
 
 - [x] Define a provider interface for OpenAI and a deterministic local/mock provider for tests
 - [x] Generate a structured site summary from the site model and extracted document text
-- [ ] Add high-level, grading, drainage, and utilities summary sections when data exists
-- [ ] Generate attention flags for steep slopes, tight setbacks, missing data, and unusual elevations
+- [x] Add high-level, grading, drainage, and utilities summary sections when data exists
+- [x] Generate attention flags for steep slopes, tight setbacks, missing data, and unusual elevations
 - [x] Parse question intent for measurements such as setback distance and elevation
 - [x] Route computable questions to deterministic geometry calculations first
-- [ ] Use retrieval of relevant source text and geometry context for explanatory responses
+- [x] Use retrieval of relevant source text and geometry context for explanatory responses
 - [x] Return numeric answer, units, method, source reference, confidence/limitations, and timestamp
 - [x] Clearly label unknown or insufficient-data answers
-- [ ] Add prompt-injection and untrusted-document handling rules
+- [x] Add prompt-injection and untrusted-document handling rules
 - [x] Store question and answer revisions without storing secrets
 
 **Exit criteria:**
 
-- [ ] “What is the setback distance?” can produce a calculation when the required entities exist
-- [ ] AI responses cite the file/page/layer/entity context used to answer
-- [ ] The system refuses to invent measurements when source data is missing
-- [ ] Mock-provider tests run without network access
-- [ ] Golden test cases cover correct answers, ambiguous questions, and insufficient data
+- [x] “What is the setback distance?” can produce a calculation when the required entities exist
+- [x] AI responses cite the file/page/layer/entity context used to answer
+- [x] The system refuses to invent measurements when source data is missing
+- [x] Mock-provider tests run without network access
+- [x] Golden test cases cover correct answers, ambiguous questions, and insufficient data
 
 ### Phase 8 - Quality, Security, and Integration Hardening
 

@@ -746,6 +746,16 @@ def read_calculation(
     return calculation
 
 
+def _entity_payload(entity: SiteModelEntity) -> dict[str, Any]:
+    return {
+        "entity_type": entity.entity_type,
+        "geometry": entity.geometry,
+        "properties": entity.properties,
+        "validation_status": entity.validation_status,
+        "source_reference": entity.source_reference,
+    }
+
+
 @router.post("/projects/{project_id}/summaries", response_model=SummaryResponse)
 def create_summary(
     project_id: str, revision_id: str | None = None, database: Session = Depends(get_db)
@@ -762,7 +772,8 @@ def create_summary(
         warnings = [
             entity.validation_status for entity in entities if entity.validation_status != "valid"
         ]
-    content = MockAIProvider().summarize({"entities": entities, "warnings": warnings})
+    entities_payload = [_entity_payload(entity) for entity in entities]
+    content = MockAIProvider().summarize({"entities": entities_payload, "warnings": warnings})
     summary = ProjectSummary(project_id=project_id, revision_id=revision_id, content=content)
     database.add(summary)
     database.commit()
@@ -776,7 +787,17 @@ def ask_question(
 ) -> QuestionAnswer:
     get_project_or_404(project_id, database)
     intent = route_question(payload.question)
-    answer = MockAIProvider().answer(payload.question, {"source_references": []})
+    entities_payload: list[dict[str, Any]] = []
+    if payload.revision_id:
+        entities = list(
+            database.scalars(
+                select(SiteModelEntity).where(SiteModelEntity.revision_id == payload.revision_id)
+            )
+        )
+        entities_payload = [_entity_payload(entity) for entity in entities]
+    answer = MockAIProvider().answer(
+        payload.question, {"entities": entities_payload, "intent": intent}
+    )
     question = QuestionAnswer(
         project_id=project_id,
         revision_id=payload.revision_id,

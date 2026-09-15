@@ -26,6 +26,9 @@ All notable project changes will be recorded here. Entries should describe user-
 - Phase 7 deterministic/mock source-grounded summaries and question-answer persistence.
 - CSV site-model acceptance now aggregates non-geometric table rows and maps coordinate rows to points instead of creating one unmapped entity per row.
 - TXT site-model acceptance now aggregates text lines into one text entity with line count and sample lines.
+- Phase 7 grading, drainage, and utilities summary sections, plus attention flags for steep slopes, tight clearances, unusual elevation ranges, and unmapped entities.
+- Deterministic distance, slope, and elevation question answering from site-model geometry, with clear ambiguous/insufficient-data responses when the required entities are not present or not uniquely identifiable.
+- Source-text retrieval for explanatory answers, with prompt-injection sanitization applied to extracted document text before use.
 
 ### Planned
 
