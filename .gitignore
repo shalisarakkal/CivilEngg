@@ -29,6 +29,7 @@ generated/
 coverage/
 playwright-report/
 test-results/
+frontend/.e2e-data/
 
 # IDE and operating-system files
 .vscode/

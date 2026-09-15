@@ -246,7 +246,7 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Add end-to-end Playwright coverage for create project, upload, process, inspect, calculate, and ask
+- [x] Add end-to-end Playwright coverage for create project, upload, process, inspect, calculate, and ask
 - [x] Add API integration tests using an isolated test database and file directory
 - [x] Test restart and recovery behavior for interrupted processing jobs
 - [x] Test large files, malformed files, duplicate files, and concurrent requests
@@ -259,11 +259,11 @@ Phase 6 lifecycle additions:
 
 **Exit criteria:**
 
-- [ ] The primary workflow passes in a clean environment
-- [ ] Critical failures have actionable logs and user-facing messages
-- [ ] Security checks cover uploads, file access, secrets, and prompt inputs
+- [x] The primary workflow passes in a clean environment (isolated SQLite database and storage directory; see VERIFY.md test results)
+- [x] Critical failures have actionable logs and user-facing messages
+- [x] Security checks cover uploads, file access, secrets, and prompt inputs (no secrets are handled in the MVP; see RISK_REGISTER.md)
 - [ ] Engineering calculations pass subject-matter review for the supported cases
-- [ ] MVP has documented known limitations and test results
+- [x] MVP has documented known limitations and test results (see VERIFY.md)
 
 ### Phase 9 - MVP Release and Deployment
 

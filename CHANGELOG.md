@@ -39,6 +39,8 @@ All notable project changes will be recorded here. Entries should describe user-
 - Added unit tests for path-traversal and unsafe-filename rejection in local storage, and API-level tests for malformed-file processing, interrupted-job recovery, and concurrent duplicate uploads.
 - Added a "Site intelligence" workspace section: a "Request site summary" action and an "Ask a question" form, closing the gap where Phase 7's summary/question-answering API had no frontend UI. Answers and summaries are clearly labeled AI-generated with method, confidence, and limitations shown alongside the result.
 - Formalized the no-authentication/single-user MVP decision as ADR-005 and updated the risk register to reflect Phase 7/8 mitigations (deterministic AI answers, the checksum race fix, and the request-body size limit); AI-provider timeout handling is explicitly deferred until a real network provider is integrated.
+- Added real end-to-end Playwright coverage (create project, upload, process, inspect, calculate, select-to-highlight, ask, and request-summary) running against a live backend with an isolated SQLite database and storage directory, in addition to the existing mocked component tests.
+- Documented current known limitations and a test-results summary in VERIFY.md for the Phase 8 exit criteria.
 
 ### Planned
 

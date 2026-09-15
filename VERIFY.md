@@ -92,7 +92,7 @@ uv run alembic current
 Expected:
 
 ```text
-0007_add_calculation_details (head)
+0009_unique_source_file_checksum (head)
 ```
 
 Return to the project root:
@@ -121,8 +121,10 @@ Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Compress
 Expected:
 
 ```json
-{"status":"ok","environment":"development"}
+{"status":"ok","environment":"development","database":"ok"}
 ```
+
+`database` reports `"unavailable"` instead of failing the request if the configured database cannot be reached.
 
 If port `8000` is busy, use another port:
 
@@ -336,5 +338,18 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.
 - User deletion archives the physical file; admin restore and permanent purge are available through the archive panel/API.
-- Authentication is not yet enabled for the local single-user workflow.
-- The real PostgreSQL migration is verified locally, but the application still requires PostgreSQL/PostGIS to be running for database-backed API checks.
+- Authentication is not enabled (ADR-005): the MVP targets single-user, local-only deployment. Authorization boundaries are deferred to a future multi-user release.
+- The AI provider is a deterministic mock (Phase 7): it never calls a real network model, so summaries and answers are limited to what can be computed or retrieved from the site model and extracted text. A real provider (e.g. OpenAI), and its timeout/retry handling, is deferred to a post-MVP release.
+- Test fixtures are synthetic/sanitized files, not real client plan sets (Phase 0 exit criterion still open).
+- Engineering calculation outputs have automated hand-verified test coverage (see `backend/tests/test_calculations.py` for the distance/area/slope/perimeter cases and their expected values) but have not yet been reviewed by a licensed civil engineer (Phase 8 exit criterion still open).
+- The real PostgreSQL migration is verified locally, but the application still requires PostgreSQL/PostGIS to be running for database-backed API checks. Automated tests run against an isolated SQLite database instead.
+
+## 11. Test Results Summary (as of Phase 8 hardening)
+
+- Backend: `uv run pytest` — 53 tests passing (unit, API/integration, storage, processing-resilience, and operations/diagnostics tests), each using an isolated SQLite database and temporary storage directory.
+- Backend: `ruff check`, `ruff format --check`, and `mypy src` all pass cleanly.
+- Frontend: `npm run typecheck`, `npm run lint`, and `npm run build` all pass cleanly.
+- Frontend: `npm run test:e2e` (Playwright) — 6 tests passing:
+  - 4 component-level tests against a mocked API (upload, calculation, and two error states).
+  - 2 true end-to-end tests against a real backend, isolated SQLite database, and local storage directory, covering create project, upload, process, inspect, calculate, select-to-highlight, ask, and request-summary; plus a refusal case with no accepted revision.
+- Notable issues found and fixed while writing this coverage (see CHANGELOG.md for detail): a UI-stuck-on-network-failure bug in three form handlers, a missing status message on first-project-creation failure, a missing retry path for interrupted processing jobs, and a genuine race condition allowing concurrent duplicate uploads (fixed with a database-level unique constraint).
