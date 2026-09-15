@@ -7,7 +7,7 @@ type SourceFile = { id: string; original_name: string; size_bytes: number; statu
 type ProcessingJob = { id: string; source_file_id: string; status: string };
 type Revision = { id: string; revision_number: number; created_at: string; source_job_ids: string[] | null; notes: string | null };
 type Entity = { id: string; entity_type: string; geometry: Record<string, unknown> | null; validation_status: string; source_reference: Record<string, unknown> | null };
-type Calculation = { id: string; calculation_type: string; result: number; unit: string; formula: string; assumptions: unknown[] | null };
+type Calculation = { id: string; calculation_type: string; result: number; unit: string; formula: string; assumptions: unknown[] | null; revision_id: string | null; inputs: Record<string, unknown> };
 
 type CalculationType = "slope" | "distance" | "area" | "perimeter";
 type PerimeterGeometryType = "LineString" | "Polygon";
@@ -17,6 +17,25 @@ const defaultGeometry = '{"type":"Point","coordinates":[0,0]}';
 const areaGeometry = '{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}';
 const perimeterGeometry = '{"type":"LineString","coordinates":[[0,0],[10,0],[10,10],[0,10],[0,0]]}';
 const polygonPerimeterGeometry = '{"type":"Polygon","coordinates":[[[20,0],[0,0],[0,10],[20,10],[20,0]]]}'
+
+function coordinatesEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((value, index) => coordinatesEqual(value, b[index]));
+  }
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-6;
+  return a === b;
+}
+
+function geometriesEqual(a: Record<string, unknown>, b: Record<string, unknown> | null): boolean {
+  if (!b || a.type !== b.type) return false;
+  return coordinatesEqual(a.coordinates, b.coordinates);
+}
+
+function calculationGeometries(inputs: Record<string, unknown>): Record<string, unknown>[] {
+  return ["geometry", "first_geometry", "second_geometry"]
+    .map((key) => inputs[key])
+    .filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null);
+}
 
 function processingStatusLabel(status: string) {
   if (status === "completed") return "Processing completed";
@@ -28,11 +47,11 @@ function processingStatusLabel(status: string) {
 
 function GeometryPreview({
   entities,
-  selectedId,
+  highlightedIds,
   onSelect,
 }: {
   entities: Entity[];
-  selectedId: string | null;
+  highlightedIds: string[];
   onSelect: (entity: Entity) => void;
 }) {
   const geometries = entities.flatMap((entity) => {
@@ -64,7 +83,7 @@ function GeometryPreview({
   const scaleY = (value: number) => 196 - ((value - minY) / (maxY - minY || 1)) * 172;
   return <svg className="geometry-preview" viewBox="0 0 500 220" role="img" aria-label="Site model geometry preview">
     {geometries.map(({ entity, type, points }) => {
-      const selected = entity.id === selectedId;
+      const selected = highlightedIds.includes(entity.id);
       const plotted = points.map((point) => `${scaleX(point[0])},${scaleY(point[1])}`).join(" ");
       if (type === "Point") return <circle key={entity.id} cx={scaleX(points[0][0])} cy={scaleY(points[0][1])} r={selected ? 7 : 5} className={selected ? "geometry-selected" : "geometry-point"} onClick={() => onSelect(entity)} />;
       return <polyline key={entity.id} points={plotted} className={selected ? "geometry-selected" : "geometry-line"} onClick={() => onSelect(entity)} />;
@@ -99,7 +118,8 @@ export default function ProjectWorkspace() {
   const [acceptingFileId, setAcceptingFileId] = useState<string | null>(null);
   const [acceptedFileIds, setAcceptedFileIds] = useState<string[]>([]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [highlightedEntityIds, setHighlightedEntityIds] = useState<string[]>([]);
+  const [selectedCalculationId, setSelectedCalculationId] = useState<string | null>(null);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
   const [entityPage, setEntityPage] = useState(0);
   const entityPageSize = 200;
@@ -150,21 +170,49 @@ export default function ProjectWorkspace() {
     await loadProjectData(project);
   }
 
-  async function loadEntities(projectId: string, revisionId: string) {
+  async function loadEntities(projectId: string, revisionId: string): Promise<Entity[]> {
     const response = await fetch(
       `${apiUrl}/projects/${projectId}/site-model/revisions/${revisionId}/entities?limit=500`,
     );
-    if (response.ok) {
-      setEntities(await response.json());
-      setEntityPage(0);
-    }
+    if (!response.ok) return [];
+    const data: Entity[] = await response.json();
+    setEntities(data);
+    setEntityPage(0);
+    return data;
   }
 
   async function selectRevision(revisionId: string) {
     if (!selectedProject) return;
     setSelectedRevisionId(revisionId);
-    setSelectedEntityId(null);
+    setHighlightedEntityIds([]);
+    setSelectedCalculationId(null);
     await loadEntities(selectedProject.id, revisionId);
+  }
+
+  async function selectCalculationResult(calculation: Calculation) {
+    if (!selectedProject) return;
+    setSelectedCalculationId(calculation.id);
+    const geometries = calculationGeometries(calculation.inputs);
+    if (geometries.length === 0) {
+      setHighlightedEntityIds([]);
+      setMessage(`${calculation.calculation_type} calculations do not reference specific site-model geometry.`);
+      return;
+    }
+    let targetEntities = entities;
+    if (calculation.revision_id && calculation.revision_id !== selectedRevisionId) {
+      targetEntities = await loadEntities(selectedProject.id, calculation.revision_id);
+      setSelectedRevisionId(calculation.revision_id);
+    }
+    const matches = targetEntities.filter(
+      (entity) => entity.geometry && geometries.some((geometry) => geometriesEqual(geometry, entity.geometry)),
+    );
+    setHighlightedEntityIds(matches.map((entity) => entity.id));
+    if (matches.length > 0) {
+      const sources = matches.map((entity) => entity.source_reference?.file_name?.toString() ?? "unknown source");
+      setMessage(`Highlighting source geometry from ${Array.from(new Set(sources)).join(", ")}.`);
+    } else {
+      setMessage("No matching source geometry was found in the site model for this calculation.");
+    }
   }
 
   async function createProject(event: FormEvent<HTMLFormElement>) {
@@ -174,39 +222,49 @@ export default function ProjectWorkspace() {
       return;
     }
     setLoading(true);
-    const response = await fetch(`${apiUrl}/projects`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: projectName.trim() }),
-    });
-    if (response.ok) {
-      const project: Project = await response.json();
-      setProjects((current) => [...current, project]);
-      setProjectName("");
-      await selectProject(project);
-      setMessage("Project created. Add a source file to begin.");
-    } else setMessage("Project could not be created.");
-    setLoading(false);
+    try {
+      const response = await fetch(`${apiUrl}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: projectName.trim() }),
+      });
+      if (response.ok) {
+        const project: Project = await response.json();
+        setProjects((current) => [...current, project]);
+        setProjectName("");
+        await selectProject(project);
+        setMessage("Project created. Add a source file to begin.");
+      } else setMessage("Project could not be created.");
+    } catch (error) {
+      setMessage(error instanceof Error ? `Project request failed: ${error.message}` : "Project request failed.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function uploadFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProject || !selectedFile) return;
     setLoading(true);
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-    const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
-    if (response.ok) {
-      setSelectedFile(null);
-      setMessage("File uploaded and queued for processing.");
-      await loadProjectData(selectedProject);
-      const input = document.getElementById("source-file") as HTMLInputElement | null;
-      if (input) input.value = "";
-    } else {
-      const error = await response.json().catch(() => ({}));
-      setMessage(error.detail ?? "File could not be uploaded.");
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
+      if (response.ok) {
+        setSelectedFile(null);
+        setMessage("File uploaded and queued for processing.");
+        await loadProjectData(selectedProject);
+        const input = document.getElementById("source-file") as HTMLInputElement | null;
+        if (input) input.value = "";
+      } else {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? "File could not be uploaded.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? `Upload request failed: ${error.message}` : "Upload request failed.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function processFile(file: SourceFile) {
@@ -349,20 +407,25 @@ export default function ProjectWorkspace() {
       return;
     }
     setLoading(true);
-    const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/calculations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ calculation_type: calculationType, inputs, coordinate_unit: coordinateUnit, unit: calculationUnit, revision_id: revisions[0]?.id }),
-    });
-    if (response.ok) {
-      const calculation: Calculation = await response.json();
-      setCalculations((current) => [calculation, ...current]);
-      setMessage(`${calculationType} calculation completed.`);
-    } else {
-      const error = await response.json().catch(() => ({}));
-      setMessage(error.detail ?? "Calculation could not be completed.");
+    try {
+      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/calculations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calculation_type: calculationType, inputs, coordinate_unit: coordinateUnit, unit: calculationUnit, revision_id: revisions[0]?.id }),
+      });
+      if (response.ok) {
+        const calculation: Calculation = await response.json();
+        setCalculations((current) => [calculation, ...current]);
+        setMessage(`${calculationType} calculation completed.`);
+      } else {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? "Calculation could not be completed.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? `Calculation request failed: ${error.message}` : "Calculation request failed.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function changeCalculationType(type: CalculationType) {
@@ -452,12 +515,12 @@ export default function ProjectWorkspace() {
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><span className="project-mark">06</span></div>
             <div className="upload-panel"><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, and TIFF files up to 50 MB.</p></div><form className="upload-form" onSubmit={uploadFile}><label className="file-picker" htmlFor="source-file"><span>{selectedFile?.name ?? "Choose a source file"}</span><input id="source-file" type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label><button type="submit" disabled={loading || selectedFile === null}>Upload file</button></form></div>
             <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small></div><div className="file-status"><span>{processingStatusLabel(file.status)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId === file.id} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>)}</div>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} selectedId={selectedEntityId} onSelect={(entity) => { setSelectedEntityId(entity.id); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${selectedEntityId === entity.id ? "entity-selected" : ""}`} key={entity.id} onClick={() => setSelectedEntityId(entity.id)}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span><small>{entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}</>}</section>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <div className="result-row" key={calculation.id}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}</small></div>)}</div>}</section>
-            <p className="message" role="status">{message}</p>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span><small>{entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}</>}</section>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}</small></button>)}</div>}</section>
             {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
             {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
           </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
+          <p className="message" role="status">{message}</p>
         </section>
       </section>
     </main>

@@ -29,6 +29,9 @@ All notable project changes will be recorded here. Entries should describe user-
 - Phase 7 grading, drainage, and utilities summary sections, plus attention flags for steep slopes, tight clearances, unusual elevation ranges, and unmapped entities.
 - Deterministic distance, slope, and elevation question answering from site-model geometry, with clear ambiguous/insufficient-data responses when the required entities are not present or not uniquely identifiable.
 - Source-text retrieval for explanatory answers, with prompt-injection sanitization applied to extracted document text before use.
+- Phase 6 calculation-to-geometry highlighting: selecting a calculation result highlights the site-model geometry it references (switching revisions if needed) or explains when a calculation type has no associated geometry.
+- Playwright browser tests covering upload, calculation, and error states, run via `npm run test:e2e`.
+- Fixed `createProject`, `uploadFile`, and `createCalculation` leaving the UI permanently disabled after a network failure by adding the same try/catch/finally handling already used elsewhere; the project-creation status message now renders even before a project is selected.
 
 ### Planned
 

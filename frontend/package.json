@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "next": "latest",
@@ -14,6 +15,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

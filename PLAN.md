@@ -201,10 +201,10 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 **Exit criteria:**
 
 - [x] A user can upload a file, inspect extracted geometry, and run a calculation from the UI
-- [ ] Selecting a calculation result highlights the relevant geometry or source location where possible
+- [x] Selecting a calculation result highlights the relevant geometry or source location where possible
 - [x] The UI clearly distinguishes extracted, calculated, and AI-generated information
 - [x] Core screens work at desktop and mobile viewport sizes
-- [ ] Frontend browser tests cover upload state, calculation state, and error state; automated backend coverage is complete
+- [x] Frontend browser tests cover upload state, calculation state, and error state; automated backend coverage is complete
 
 Phase 6 lifecycle additions:
 
