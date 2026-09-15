@@ -4,7 +4,7 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project has working Phase 0 through Phase 6 foundations and an initial deterministic/mock AI foundation for Phase 7. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. The next Phase 7 work is connecting a real provider and source retrieval:
+The project has working Phase 0 through Phase 8 foundations: file ingestion, extraction, a versioned site model, deterministic calculations, a workspace UI, deterministic/mock source-grounded summaries and question answering, and Phase 8 quality/security/integration hardening (structured logging, request limits, path-traversal protection, real end-to-end Playwright coverage, and a documented non-licensed review of the calculation engine). Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. Phase 9 closes remaining gaps against the original requirements (LandXML, label-to-geometry linking, key-phrase extraction, bearing/COGO parsing, semantic site-model classification, directional questions, and plan-sheet snippets) before the Phase Z release:
 
 1. Create a project.
 2. Upload a supported file.

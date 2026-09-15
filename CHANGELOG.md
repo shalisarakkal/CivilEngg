@@ -42,6 +42,7 @@ All notable project changes will be recorded here. Entries should describe user-
 - Added real end-to-end Playwright coverage (create project, upload, process, inspect, calculate, select-to-highlight, ask, and request-summary) running against a live backend with an isolated SQLite database and storage directory, in addition to the existing mocked component tests.
 - Documented current known limitations and a test-results summary in VERIFY.md for the Phase 8 exit criteria.
 - Completed Phase 8 with a non-licensed technical review of the calculation engine (VERIFY.md section 12): verified every formula against standard civil-engineering/geometry definitions and hand-verified test cases, added missing edge-case tests (downhill/level slope, negative elevations, zero distance, negative-input rejection), and logged a newly found risk that calculations assume a projected CRS with nothing yet enforcing it. A licensed PE review is still recommended before real engineering use.
+- Re-planned PLAN.md's remaining phases after auditing Requirements.md against the shipped implementation: found seven capabilities from the original requirements (LandXML, label-to-geometry linking, key-phrase extraction, bearing/COGO parsing, semantic site-model classification, directional questions, and plan-sheet snippets) that were never explicitly built or explicitly deferred. Moved release/deployment work to a renamed Phase Z and inserted a new Phase 9 to close these gaps beforehand.
 
 ### Planned
 

@@ -265,7 +265,31 @@ Phase 6 lifecycle additions:
 - [x] Engineering calculations pass subject-matter review for the supported cases (non-licensed technical review; see VERIFY.md section 12 — licensed PE review still recommended before real-world use)
 - [x] MVP has documented known limitations and test results (see VERIFY.md)
 
-### Phase 9 - MVP Release and Deployment
+### Phase 9 - Closing Requirements Gaps
+
+**Objective:** Implement the capabilities from Requirements.md that were never explicitly built or explicitly deferred, so the release in Phase Z reflects a deliberate, complete scope decision rather than silent omissions. Found during a Phase 8 documentation audit (see CHANGELOG.md); each item below was present in the original requirements but absent from both the MVP scope and the deferred/roadmap lists.
+
+**Work items:**
+
+- [ ] Add LandXML parsing to the extraction pipeline (points and surfaces/alignments where present), producing the same normalized document representation used by the other parsers
+- [ ] Link extracted text labels (e.g. "FF=102.50", "Top of curb 101.80") to nearby geometry by spatial proximity, and preserve that link as a source reference
+- [ ] Extract key phrases from narrative text (e.g. "setback", "finished floor elevation") during document parsing and surface them as searchable site-model annotations, rather than only matching keywords in the user's question
+- [ ] Parse bearing/distance (COGO) values for parcel boundary segments where present in DXF/CSV/LandXML input, in addition to the raw coordinates already extracted
+- [ ] Add semantic site-model entity classification (parcel boundary, building footprint, driveway/road, curb cut) with optional zoning tags, beyond today's generic point/line/polygon/text typing
+- [ ] Support directional/targeted questions (e.g. "distance to the north property line") by resolving a named entity role and direction, instead of always picking whichever two mapped geometries exist
+- [ ] Generate an annotated snippet/screenshot of the source plan sheet with the relevant geometry highlighted, in addition to the existing in-app schematic highlight
+
+**Exit criteria:**
+
+- [ ] A LandXML fixture can be ingested and produces site-model entities
+- [ ] At least one extracted label is correctly linked to its nearest geometry entity with a traceable source reference
+- [ ] Key phrases extracted from a sample document are retrievable and shown in the UI
+- [ ] At least one parcel boundary case demonstrates bearing/distance-derived geometry alongside raw coordinates
+- [ ] Site-model entities can carry a semantic type (parcel/building/driveway/etc.) and it is visible in the UI
+- [ ] A directional question ("north property line") returns a different, correct answer than a generic nearest-geometry query
+- [ ] A question or calculation result can produce an annotated image/snippet of the source plan sheet, not just the in-app schematic view
+
+### Phase Z - MVP Release and Deployment
 
 **Objective:** Deliver a usable, repeatable MVP with a documented operational path.
 
