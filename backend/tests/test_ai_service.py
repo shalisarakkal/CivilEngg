@@ -101,6 +101,56 @@ def test_sanitize_source_text_removes_injection_patterns() -> None:
     assert len(flags) == 1
 
 
+def _boundary_line(y_or_x: float, axis: str, semantic_type: str = "parcel_boundary") -> dict:
+    coordinates = (
+        [[-50, y_or_x, 0], [50, y_or_x, 0]] if axis == "y" else [[y_or_x, -50, 0], [y_or_x, 50, 0]]
+    )
+    return {
+        "entity_type": "line",
+        "geometry": {"type": "LineString", "coordinates": coordinates},
+        "properties": {"semantic_type": semantic_type},
+        "validation_status": "valid",
+        "source_reference": {"file_name": "site.dxf", "entity_id": f"boundary-{y_or_x}"},
+    }
+
+
+def test_directional_question_resolves_the_correct_boundary_and_measures_distance() -> None:
+    entities = [
+        _point_entity(0, 0) | {"properties": {"semantic_type": "building_footprint"}},
+        _boundary_line(100, "y"),  # north
+        _boundary_line(-100, "y"),  # south
+        _boundary_line(50, "x"),  # east
+        _boundary_line(-50, "x"),  # west
+    ]
+    answer = MockAIProvider().answer(
+        "What is the distance to the north property line?", {"entities": entities}
+    )
+    assert answer["result"] == 100.0
+    assert answer["confidence"] == 0.9
+    assert answer["source_references"][0]["entity_id"] == "boundary-100"
+
+    # The same entities answered generically (no direction) are ambiguous, since five
+    # valid geometries exist with no way to pick which two to compare.
+    generic_answer = MockAIProvider().answer(
+        "What is the setback distance?", {"entities": entities, "intent": "distance"}
+    )
+    assert "ambiguous" in generic_answer["answer"].lower()
+
+
+def test_directional_question_routing_and_missing_role_handling() -> None:
+    assert (
+        route_question("What is the distance to the north property line?") == "directional_distance"
+    )
+    assert route_question("What is the setback distance?") == "distance"
+
+    answer = MockAIProvider().answer(
+        "What is the distance to the north property line?", {"entities": []}
+    )
+    assert answer["confidence"] == 0.0
+    assert "Insufficient data" in answer["answer"]
+    assert "No parcel boundary entities" in answer["limitations"][0]
+
+
 def test_summarize_reports_grading_drainage_utilities_and_attention_flags() -> None:
     entities = [
         {

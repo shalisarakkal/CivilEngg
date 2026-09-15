@@ -339,6 +339,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - Key-phrase extraction (Phase 9) scans `.txt` narrative lines and PDF page text against a fixed vocabulary of civil-engineering terms (`KEY_PHRASES` in extraction.py); it does not scan DXF/CSV/LandXML input (not narrative text) and will miss any relevant term not in that list (see RISK_REGISTER.md).
 - COGO bearing/distance parsing (Phase 9) only covers CSV input with a point of beginning (x/y or easting/northing) and quadrant bearing/distance columns (e.g. `N45.00E`, `100.00`); DXF/LandXML bearing annotations are not parsed into geometry (see RISK_REGISTER.md).
 - Semantic entity classification (Phase 9) infers `semantic_type` only from a DXF layer name or an explicit CSV type/classification column; it never guesses from geometry shape, so an ambiguously named layer or a CSV without a type column stays unclassified (see RISK_REGISTER.md).
+- Directional questions (Phase 9) only recognize "north/south/east/west" combined with a parcel/building/driveway/curb-cut role, and depend entirely on those entities already carrying a `semantic_type`; an unclassified entity or an unsupported direction/role returns an insufficient-data answer rather than a guess (see RISK_REGISTER.md).
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.

@@ -9,6 +9,32 @@ from civil_engineering.calculations import CalculationError, calculate_distance,
 DRAINAGE_KEYWORDS = ("storm", "drain", "culvert", "swale", "detention", "retention")
 UTILITY_KEYWORDS = ("water", "sewer", "gas", "electric", "utility", "manhole", "hydrant")
 
+# Compass direction -> (coordinate axis, sign) for picking the entity furthest in that
+# direction; north/south compare y (northing), east/west compare x (easting), matching
+# the coordinate convention used throughout the app (see extraction.py's LandXML note).
+DIRECTION_AXES: dict[str, tuple[int, float]] = {
+    "north": (1, 1.0),
+    "south": (1, -1.0),
+    "east": (0, 1.0),
+    "west": (0, -1.0),
+}
+
+# Question-language role -> the semantic_type classification it refers to (see
+# routes.py's _classify_entity). Longer, more specific phrases are not required to come
+# first: every synonym for a role maps to the same semantic_type.
+ROLE_TO_SEMANTIC_TYPE = {
+    "property line": "parcel_boundary",
+    "property boundary": "parcel_boundary",
+    "parcel boundary": "parcel_boundary",
+    "parcel": "parcel_boundary",
+    "building footprint": "building_footprint",
+    "building": "building_footprint",
+    "footprint": "building_footprint",
+    "driveway": "driveway_road",
+    "road": "driveway_road",
+    "curb cut": "curb_cut",
+}
+
 # Heuristic thresholds for attention flags, not engineering code requirements.
 STEEP_SLOPE_PERCENT = 15.0
 TIGHT_SETBACK_UNITS = 5.0
@@ -55,6 +81,8 @@ def sanitize_source_text(lines: list[str]) -> tuple[list[str], list[str]]:
 
 def route_question(question: str) -> str:
     normalized = question.lower()
+    if _parse_directional_question(question) is not None:
+        return "directional_distance"
     if "setback" in normalized or "distance" in normalized:
         return "distance"
     if "slope" in normalized:
@@ -62,6 +90,17 @@ def route_question(question: str) -> str:
     if "elevation" in normalized:
         return "elevation"
     return "summary"
+
+
+def _parse_directional_question(question: str) -> tuple[str, str] | None:
+    normalized = question.lower()
+    direction = next((word for word in DIRECTION_AXES if word in normalized), None)
+    if direction is None:
+        return None
+    role = next((phrase for phrase in ROLE_TO_SEMANTIC_TYPE if phrase in normalized), None)
+    if role is None:
+        return None
+    return direction, ROLE_TO_SEMANTIC_TYPE[role]
 
 
 def _point_z(geometry: dict[str, Any] | None) -> float | None:
@@ -275,6 +314,63 @@ def _answer_distance(comparable: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _entity_centroid(entity: dict[str, Any]) -> tuple[float, float] | None:
+    geometry = entity.get("geometry")
+    if not geometry:
+        return None
+    geom_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geom_type == "Point":
+        return (coordinates[0], coordinates[1])
+    if geom_type == "LineString":
+        xs, ys = zip(*[(point[0], point[1]) for point in coordinates], strict=True)
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+    if geom_type == "Polygon":
+        ring = coordinates[0]
+        xs, ys = zip(*[(point[0], point[1]) for point in ring], strict=True)
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+    return None
+
+
+def _answer_directional(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    parsed = _parse_directional_question(question)
+    if parsed is None:
+        return _insufficient("Could not identify a compass direction and entity role.")
+    direction, semantic_type = parsed
+    role_label = semantic_type.replace("_", " ")
+    axis, sign = DIRECTION_AXES[direction]
+    candidates = [
+        (entity, centroid)
+        for entity in entities
+        if entity.get("validation_status") == "valid"
+        and (entity.get("properties") or {}).get("semantic_type") == semantic_type
+        and (centroid := _entity_centroid(entity)) is not None
+    ]
+    if not candidates:
+        return _insufficient(f"No {role_label} entities were found to resolve '{direction}'.")
+    chosen, _ = max(candidates, key=lambda pair: sign * pair[1][axis])
+    others = _comparable_geometries(
+        [
+            entity
+            for entity in entities
+            if entity is not chosen
+            and (entity.get("properties") or {}).get("semantic_type") != semantic_type
+        ]
+    )
+    if not others:
+        return _insufficient(
+            f"Resolved the {direction} {role_label}, but no other mapped geometry is "
+            "available to measure a distance to it."
+        )
+    if len(others) > 1:
+        return _ambiguous(
+            others,
+            f"Multiple other mapped geometries could define the distance to the "
+            f"{direction} {role_label}.",
+        )
+    return _answer_distance([chosen, others[0]])
+
+
 def _answer_slope(entities: list[dict[str, Any]]) -> dict[str, Any]:
     points = _elevation_points(entities)
     if len(points) < 2:
@@ -372,6 +468,8 @@ class MockAIProvider:
     def answer(self, question: str, context: dict[str, Any]) -> dict[str, Any]:
         entities = context.get("entities", [])
         intent = context.get("intent") or route_question(question)
+        if intent == "directional_distance":
+            return _answer_directional(question, entities)
         if intent == "distance":
             return _answer_distance(_comparable_geometries(entities))
         if intent == "slope":
