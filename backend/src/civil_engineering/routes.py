@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from shapely.geometry import Point, shape
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +33,7 @@ from civil_engineering.models import (
     SourceFile,
     new_id,
 )
+from civil_engineering.plan_snippets import PlanSnippetError, render_dxf_snippet
 from civil_engineering.schemas import (
     CalculationRequest,
     CalculationResponse,
@@ -698,6 +699,42 @@ def list_site_model_entities(
         .offset(offset)
     )
     return list(database.scalars(statement))
+
+
+@router.get("/projects/{project_id}/site-model/entities/{entity_id}/snippet")
+def get_entity_plan_snippet(
+    project_id: str, entity_id: str, database: Session = Depends(get_db)
+) -> Response:
+    get_project_or_404(project_id, database)
+    entity = database.scalar(
+        select(SiteModelEntity)
+        .join(ProjectRevision, ProjectRevision.id == SiteModelEntity.revision_id)
+        .where(SiteModelEntity.id == entity_id, ProjectRevision.project_id == project_id)
+    )
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Site-model entity not found")
+    source = entity.source_reference or {}
+    file_name = source.get("file_name")
+    source_entity_id = source.get("entity_id")
+    if not file_name or not str(file_name).lower().endswith(".dxf") or source_entity_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan-sheet snippets are only available for DXF-sourced entities",
+        )
+    source_file = database.scalar(
+        select(SourceFile).where(
+            SourceFile.project_id == project_id,
+            SourceFile.original_name == file_name,
+            SourceFile.deleted_at.is_(None),
+        )
+    )
+    if source_file is None:
+        raise HTTPException(status_code=404, detail="Source DXF file not found")
+    try:
+        svg = render_dxf_snippet(Path(source_file.stored_path), str(source_entity_id))
+    except PlanSnippetError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(content=svg, media_type="image/svg+xml")
 
 
 @router.get("/projects/{project_id}/site-model/revisions/{revision_id}/compare/{other_revision_id}")

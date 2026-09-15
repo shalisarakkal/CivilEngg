@@ -277,7 +277,7 @@ Phase 6 lifecycle additions:
 - [x] Parse bearing/distance (COGO) values for parcel boundary segments where present in DXF/CSV/LandXML input, in addition to the raw coordinates already extracted
 - [x] Add semantic site-model entity classification (parcel boundary, building footprint, driveway/road, curb cut) with optional zoning tags, beyond today's generic point/line/polygon/text typing
 - [x] Support directional/targeted questions (e.g. "distance to the north property line") by resolving a named entity role and direction, instead of always picking whichever two mapped geometries exist
-- [ ] Generate an annotated snippet/screenshot of the source plan sheet with the relevant geometry highlighted, in addition to the existing in-app schematic highlight
+- [x] Generate an annotated snippet/screenshot of the source plan sheet with the relevant geometry highlighted, in addition to the existing in-app schematic highlight
 
 **Exit criteria:**
 
@@ -287,7 +287,7 @@ Phase 6 lifecycle additions:
 - [x] At least one parcel boundary case demonstrates bearing/distance-derived geometry alongside raw coordinates
 - [x] Site-model entities can carry a semantic type (parcel/building/driveway/etc.) and it is visible in the UI
 - [x] A directional question ("north property line") returns a different, correct answer than a generic nearest-geometry query
-- [ ] A question or calculation result can produce an annotated image/snippet of the source plan sheet, not just the in-app schematic view
+- [x] A question or calculation result can produce an annotated image/snippet of the source plan sheet, not just the in-app schematic view
 
 ### Phase Z - MVP Release and Deployment
 

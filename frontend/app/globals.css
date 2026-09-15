@@ -96,6 +96,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .entity-pagination-controls { align-items: center; display: flex; gap: 12px; }
 .entity-pagination-controls .secondary-button { border-color: var(--blue); color: var(--blue); font-weight: 700; }
 .entity-pagination-controls .secondary-button:hover:not(:disabled) { background: var(--blue); color: white; }
+.plan-snippet { margin-top: 18px; }
+.plan-snippet-image { background: white; border: 1px solid var(--line); margin-top: 10px; max-width: 100%; }
 .entity-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .entity-card { background: var(--panel); border-left: 3px solid var(--blue); display: flex; flex-direction: column; gap: 6px; padding: 14px; }
 .entity-card.invalid { border-left-color: #b84b43; }
