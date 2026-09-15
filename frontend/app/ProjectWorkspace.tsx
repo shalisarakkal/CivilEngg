@@ -4,14 +4,27 @@ import { FormEvent, useEffect, useState } from "react";
 
 type Project = { id: string; name: string; description: string | null; default_unit_system: string };
 type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string };
-type Revision = { id: string; revision_number: number; notes: string | null };
+type ProcessingJob = { id: string; source_file_id: string; status: string };
+type Revision = { id: string; revision_number: number; created_at: string; source_job_ids: string[] | null; notes: string | null };
 type Entity = { id: string; entity_type: string; geometry: Record<string, unknown> | null; validation_status: string; source_reference: Record<string, unknown> | null };
 type Calculation = { id: string; calculation_type: string; result: number; unit: string; formula: string; assumptions: unknown[] | null };
 
 type CalculationType = "slope" | "distance" | "area" | "perimeter";
+type PerimeterGeometryType = "LineString" | "Polygon";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const defaultGeometry = '{"type":"Point","coordinates":[0,0]}';
+const areaGeometry = '{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}';
+const perimeterGeometry = '{"type":"LineString","coordinates":[[0,0],[10,0],[10,10],[0,10],[0,0]]}';
+const polygonPerimeterGeometry = '{"type":"Polygon","coordinates":[[[20,0],[0,0],[0,10],[20,10],[20,0]]]}'
+
+function processingStatusLabel(status: string) {
+  if (status === "completed") return "Processing completed";
+  if (status === "failed") return "Processing failed";
+  if (status === "processing") return "Processing...";
+  if (status === "queued") return "Ready to process";
+  return status;
+}
 
 function GeometryPreview({
   entities,
@@ -43,7 +56,10 @@ function GeometryPreview({
   if (allPoints.length === 0) return <p className="muted">No plottable geometry in this revision.</p>;
   const xs = allPoints.map((point) => point[0]);
   const ys = allPoints.map((point) => point[1]);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const minX = xs.reduce((min, value) => (value < min ? value : min), xs[0]);
+  const maxX = xs.reduce((max, value) => (value > max ? value : max), xs[0]);
+  const minY = ys.reduce((min, value) => (value < min ? value : min), ys[0]);
+  const maxY = ys.reduce((max, value) => (value > max ? value : max), ys[0]);
   const scaleX = (value: number) => 24 + ((value - minX) / (maxX - minX || 1)) * 452;
   const scaleY = (value: number) => 196 - ((value - minY) / (maxY - minY || 1)) * 172;
   return <svg className="geometry-preview" viewBox="0 0 500 220" role="img" aria-label="Site model geometry preview">
@@ -60,6 +76,7 @@ export default function ProjectWorkspace() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [files, setFiles] = useState<SourceFile[]>([]);
+  const [processingJobs, setProcessingJobs] = useState<ProcessingJob[]>([]);
   const [archivedFiles, setArchivedFiles] = useState<SourceFile[]>([]);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -67,6 +84,7 @@ export default function ProjectWorkspace() {
   const [projectName, setProjectName] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [calculationType, setCalculationType] = useState<CalculationType>("slope");
+  const [perimeterGeometryType, setPerimeterGeometryType] = useState<PerimeterGeometryType>("LineString");
   const [coordinateUnit, setCoordinateUnit] = useState("ft");
   const [calculationUnit, setCalculationUnit] = useState("ft");
   const [startElevation, setStartElevation] = useState("100");
@@ -78,19 +96,45 @@ export default function ProjectWorkspace() {
   const [loading, setLoading] = useState(false);
   const [filePendingDelete, setFilePendingDelete] = useState<SourceFile | null>(null);
   const [filePendingPurge, setFilePendingPurge] = useState<SourceFile | null>(null);
+  const [acceptingFileId, setAcceptingFileId] = useState<string | null>(null);
+  const [acceptedFileIds, setAcceptedFileIds] = useState<string[]>([]);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [entityPage, setEntityPage] = useState(0);
+  const entityPageSize = 200;
+  const entityPageCount = Math.max(1, Math.ceil(entities.length / entityPageSize));
+  const entityPageStart = entityPage * entityPageSize;
+  const visibleEntities = entities.slice(entityPageStart, entityPageStart + entityPageSize);
+
+  function revisionSourceFile(revision: Revision) {
+    const sourceJobId = revision.source_job_ids?.[0];
+    const job = processingJobs.find((item) => item.id === sourceJobId);
+    return files.find((file) => file.id === job?.source_file_id);
+  }
 
   async function loadProjectData(project: Project) {
-    const [fileResponse, revisionResponse, calculationResponse] = await Promise.all([
+    const [fileResponse, revisionResponse, calculationResponse, processingResponse] = await Promise.all([
       fetch(`${apiUrl}/projects/${project.id}/files`),
       fetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
       fetch(`${apiUrl}/projects/${project.id}/calculations`),
+      fetch(`${apiUrl}/projects/${project.id}/processing`),
     ]);
     if (fileResponse.ok) setFiles(await fileResponse.json());
+    const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
+    setProcessingJobs(jobs);
     if (revisionResponse.ok) {
       const data: Revision[] = await revisionResponse.json();
       setRevisions(data);
-      if (data[0]) await loadEntities(project.id, data[0].id);
+      if (data[0]) {
+        setSelectedRevisionId(data[0].id);
+        await loadEntities(project.id, data[0].id);
+      } else {
+        setSelectedRevisionId(null);
+        setEntities([]);
+      }
+      const acceptedJobIds = new Set(data.flatMap((revision) => revision.source_job_ids ?? []));
+      setAcceptedFileIds(jobs.filter((job) => acceptedJobIds.has(job.id)).map((job) => job.source_file_id));
     }
     if (calculationResponse.ok) setCalculations(await calculationResponse.json());
   }
@@ -107,8 +151,20 @@ export default function ProjectWorkspace() {
   }
 
   async function loadEntities(projectId: string, revisionId: string) {
-    const response = await fetch(`${apiUrl}/projects/${projectId}/site-model/revisions/${revisionId}/entities`);
-    if (response.ok) setEntities(await response.json());
+    const response = await fetch(
+      `${apiUrl}/projects/${projectId}/site-model/revisions/${revisionId}/entities?limit=500`,
+    );
+    if (response.ok) {
+      setEntities(await response.json());
+      setEntityPage(0);
+    }
+  }
+
+  async function selectRevision(revisionId: string) {
+    if (!selectedProject) return;
+    setSelectedRevisionId(revisionId);
+    setSelectedEntityId(null);
+    await loadEntities(selectedProject.id, revisionId);
   }
 
   async function createProject(event: FormEvent<HTMLFormElement>) {
@@ -154,13 +210,24 @@ export default function ProjectWorkspace() {
   }
 
   async function processFile(file: SourceFile) {
-    if (!selectedProject) return;
-    const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
-    if (response.ok) {
+    if (!selectedProject || busyAction === `process:${file.id}`) return;
+    setBusyAction(`process:${file.id}`);
+    setMessage(`Processing ${file.original_name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `File processing failed (HTTP ${response.status}).`);
+        return;
+      }
       const job: { status: string } = await response.json();
       setMessage(`${file.original_name} processing status: ${job.status}.`);
       await loadProjectData(selectedProject);
-    } else setMessage("File processing failed to start.");
+    } catch (error) {
+      setMessage(error instanceof Error ? `Processing request failed: ${error.message}` : "Processing request failed.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function deleteFile(file: SourceFile) {
@@ -171,21 +238,45 @@ export default function ProjectWorkspace() {
   async function confirmDeleteFile() {
     if (!selectedProject || !filePendingDelete) return;
     const file = filePendingDelete;
-    const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
-    if (response.ok) {
+    if (busyAction === `delete:${file.id}`) return;
+    setBusyAction(`delete:${file.id}`);
+    setMessage(`Archiving ${file.original_name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `File archive failed (HTTP ${response.status}).`);
+        return;
+      }
       setFiles((current) => current.filter((item) => item.id !== file.id));
-      setMessage(`${file.original_name} was deleted.`);
-    } else setMessage("File could not be deleted.");
-    setFilePendingDelete(null);
-    await loadArchivedFiles();
+      setMessage(`${file.original_name} was archived.`);
+      await loadArchivedFiles();
+    } catch (error) {
+      setMessage(error instanceof Error ? `Archive request failed: ${error.message}` : "Archive request failed.");
+    } finally {
+      setBusyAction(null);
+      setFilePendingDelete(null);
+    }
   }
 
   async function restoreArchivedFile(file: SourceFile) {
-    const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
-    if (response.ok) {
+    if (busyAction === `restore:${file.id}`) return;
+    setBusyAction(`restore:${file.id}`);
+    setMessage(`Restoring ${file.original_name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Restore failed (HTTP ${response.status}).`);
+        return;
+      }
       setArchivedFiles((current) => current.filter((item) => item.id !== file.id));
       setMessage(`${file.original_name} was restored.`);
       if (selectedProject) await loadProjectData(selectedProject);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Restore request failed: ${error.message}` : "Restore request failed.");
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -196,20 +287,51 @@ export default function ProjectWorkspace() {
   async function confirmPurgeArchivedFile() {
     if (!filePendingPurge) return;
     const file = filePendingPurge;
-    const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
-    if (response.ok) setArchivedFiles((current) => current.filter((item) => item.id !== file.id));
-    setFilePendingPurge(null);
+    if (busyAction === `purge:${file.id}`) return;
+    setBusyAction(`purge:${file.id}`);
+    setMessage(`Permanently deleting ${file.original_name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Purge failed (HTTP ${response.status}).`);
+        return;
+      }
+      setArchivedFiles((current) => current.filter((item) => item.id !== file.id));
+      setMessage(`${file.original_name} was permanently deleted.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Purge request failed: ${error.message}` : "Purge request failed.");
+    } finally {
+      setBusyAction(null);
+      setFilePendingPurge(null);
+    }
   }
 
   async function acceptRevision(file: SourceFile) {
-    if (!selectedProject) return;
-    const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/site-model/revisions/from-extraction/${file.id}`, { method: "POST" });
-    if (response.ok) {
+    if (!selectedProject || acceptingFileId === file.id || acceptedFileIds.includes(file.id)) return;
+    setAcceptingFileId(file.id);
+    setMessage(`Accepting revision for ${file.original_name}...`);
+    try {
+      const response = await fetch(
+        `${apiUrl}/projects/${selectedProject.id}/site-model/revisions/from-extraction/${file.id}`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Revision could not be accepted (HTTP ${response.status}).`);
+        return;
+      }
       const revision: Revision = await response.json();
-      setRevisions((current) => [revision, ...current]);
+      setRevisions((current) => [revision, ...current.filter((item) => item.id !== revision.id)]);
+      setAcceptedFileIds((current) => current.includes(file.id) ? current : [...current, file.id]);
+      setSelectedRevisionId(revision.id);
       await loadEntities(selectedProject.id, revision.id);
-      setMessage(`Revision ${revision.revision_number} accepted into the site model.`);
-    } else setMessage("Process the file successfully before accepting a revision.");
+      setMessage(`Revision ${revision.revision_number} is ready in the site model.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Revision request failed: ${error.message}` : "Revision request failed.");
+    } finally {
+      setAcceptingFileId(null);
+    }
   }
 
   async function createCalculation(event: FormEvent<HTMLFormElement>) {
@@ -243,6 +365,21 @@ export default function ProjectWorkspace() {
     setLoading(false);
   }
 
+  function changeCalculationType(type: CalculationType) {
+    setCalculationType(type);
+    if (type === "area") setGeometry(areaGeometry);
+    else if (type === "perimeter") {
+      setPerimeterGeometryType("LineString");
+      setGeometry(perimeterGeometry);
+    }
+    else if (type === "distance") setGeometry(defaultGeometry);
+  }
+
+  function changePerimeterGeometryType(type: PerimeterGeometryType) {
+    setPerimeterGeometryType(type);
+    setGeometry(type === "Polygon" ? polygonPerimeterGeometry : perimeterGeometry);
+  }
+
   useEffect(() => {
     async function loadInitialProjects() {
       const response = await fetch(`${apiUrl}/projects`);
@@ -255,21 +392,28 @@ export default function ProjectWorkspace() {
       if (data.length > 0) {
         const project = data[0];
         setSelectedProject(project);
-        const [fileResponse, revisionResponse, calculationResponse] = await Promise.all([
+        const [fileResponse, revisionResponse, calculationResponse, processingResponse] = await Promise.all([
           fetch(`${apiUrl}/projects/${project.id}/files`),
           fetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
           fetch(`${apiUrl}/projects/${project.id}/calculations`),
+          fetch(`${apiUrl}/projects/${project.id}/processing`),
         ]);
         if (fileResponse.ok) setFiles(await fileResponse.json());
+        const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
+        setProcessingJobs(jobs);
         if (revisionResponse.ok) {
           const revisionData: Revision[] = await revisionResponse.json();
           setRevisions(revisionData);
+          if (revisionData[0]) setSelectedRevisionId(revisionData[0].id);
+          else setSelectedRevisionId(null);
+          const acceptedJobIds = new Set(revisionData.flatMap((revision) => revision.source_job_ids ?? []));
+          setAcceptedFileIds(jobs.filter((job) => acceptedJobIds.has(job.id)).map((job) => job.source_file_id));
           if (revisionData[0]) {
             const entityResponse = await fetch(
-              `${apiUrl}/projects/${project.id}/site-model/revisions/${revisionData[0].id}/entities`,
+              `${apiUrl}/projects/${project.id}/site-model/revisions/${revisionData[0].id}/entities?limit=500`,
             );
             if (entityResponse.ok) setEntities(await entityResponse.json());
-          }
+          } else setEntities([]);
         }
         if (calculationResponse.ok) setCalculations(await calculationResponse.json());
       }
@@ -301,18 +445,18 @@ export default function ProjectWorkspace() {
             {projects.length === 0 && <p className="muted">No projects yet.</p>}
             {projects.map((project) => <button className={`project-item ${selectedProject?.id === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectProject(project)}><span>{project.name}</span><small>{project.default_unit_system}</small></button>)}
           </div>
-          <section className="admin-panel"><p className="eyebrow">Admin archive</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.map((file) => <div className="archive-row" key={file.id}><strong>{file.original_name}</strong><div><button onClick={() => void restoreArchivedFile(file)}>Restore</button><button className="danger-button" onClick={() => void purgeArchivedFile(file)}>Purge</button></div></div>)}</section>
+          <section className="admin-panel"><p className="eyebrow">Admin archive</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.map((file) => <div className="archive-row" key={file.id}><strong>{file.original_name}</strong><div><button disabled={busyAction === `restore:${file.id}`} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}`} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><span className="project-mark">06</span></div>
             <div className="upload-panel"><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, and TIFF files up to 50 MB.</p></div><form className="upload-form" onSubmit={uploadFile}><label className="file-picker" htmlFor="source-file"><span>{selectedFile?.name ?? "Choose a source file"}</span><input id="source-file" type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label><button type="submit" disabled={loading || selectedFile === null}>Upload file</button></form></div>
-            <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum.slice(0, 10)}...</small></div><div className="file-status"><span>{file.status}</span>{file.status === "queued" && <button onClick={() => void processFile(file)}>Process</button>}{file.status === "completed" && <button onClick={() => void acceptRevision(file)}>Accept revision</button>}<button className="danger-button" onClick={() => void deleteFile(file)}>Delete</button></div></div>)}</div>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3></div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} selectedId={selectedEntityId} onSelect={(entity) => { setSelectedEntityId(entity.id); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{entities.map((entity) => <button className={`entity-card ${entity.validation_status} ${selectedEntityId === entity.id ? "entity-selected" : ""}`} key={entity.id} onClick={() => setSelectedEntityId(entity.id)}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span><small>{entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div></>}</section>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => setCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields"><label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <div className="result-row" key={calculation.id}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}</small></div>)}</div>}</section>
+            <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small></div><div className="file-status"><span>{processingStatusLabel(file.status)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId === file.id} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>)}</div>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} selectedId={selectedEntityId} onSelect={(entity) => { setSelectedEntityId(entity.id); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${selectedEntityId === entity.id ? "entity-selected" : ""}`} key={entity.id} onClick={() => setSelectedEntityId(entity.id)}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span><small>{entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}</>}</section>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <div className="result-row" key={calculation.id}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}</small></div>)}</div>}</section>
             <p className="message" role="status">{message}</p>
-            {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" onClick={() => void confirmDeleteFile()}>Archive file</button></div></section></div>}
-            {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" onClick={() => void confirmPurgeArchivedFile()}>Permanently delete</button></div></section></div>}
+            {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
+            {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
           </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
         </section>
       </section>

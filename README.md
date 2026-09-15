@@ -4,7 +4,7 @@ A local-first application for extracting civil-engineering information from plan
 
 ## Current Status
 
-The project has working Phase 0 through Phase 6 foundations. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. Phase 6 includes archive/restore/purge lifecycle controls, revision comparison, elevation statistics, native Circle calculations, and geometry preview. Phase 7 is ready to begin with known gaps limited to browser tests and calculation-result geometry highlighting:
+The project has working Phase 0 through Phase 6 foundations and an initial deterministic/mock AI foundation for Phase 7. Supported MVP inputs include PDF, DXF, CSV, TXT, TIFF/TIF, and related document files. TIFF/TIF files currently provide raster metadata; OCR is planned for a later vision phase. The next Phase 7 work is connecting a real provider and source retrieval:
 
 1. Create a project.
 2. Upload a supported file.

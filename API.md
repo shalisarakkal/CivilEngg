@@ -88,6 +88,8 @@ Geometry calculation requests include both `coordinate_unit` and output `unit`. 
 - `POST /projects/{project_id}/questions` - ask a source-grounded question
 - `GET /projects/{project_id}/questions` - list previous questions and answers
 
+The current implementation uses a deterministic mock provider. Unsupported questions return insufficient-data responses rather than invented engineering facts.
+
 ## Error Categories
 
 - `invalid_request`

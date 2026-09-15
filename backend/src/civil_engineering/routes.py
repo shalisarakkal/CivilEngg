@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from civil_engineering.ai_service import MockAIProvider, route_question
 from civil_engineering.calculations import (
     CalculationError,
     calculate_area,
@@ -24,6 +25,8 @@ from civil_engineering.models import (
     ProcessingJob,
     Project,
     ProjectRevision,
+    ProjectSummary,
+    QuestionAnswer,
     SiteModelEntity,
     SourceFile,
     new_id,
@@ -39,9 +42,12 @@ from civil_engineering.schemas import (
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
+    QuestionRequest,
+    QuestionResponse,
     SiteModelEntityResponse,
     SiteModelRevisionResponse,
     SourceFileResponse,
+    SummaryResponse,
 )
 from civil_engineering.site_model import SiteModelError, normalize_geometry
 from civil_engineering.storage import (
@@ -415,7 +421,7 @@ def create_site_model_revision(
         select(ExtractedDocument)
         .join(SourceFile, SourceFile.id == ExtractedDocument.source_file_id)
         .where(SourceFile.project_id == project_id, ExtractedDocument.source_file_id == file_id)
-        .order_by(ExtractedDocument.revision_number.desc())
+        .order_by(ExtractedDocument.created_at.desc(), ExtractedDocument.id.desc())
     )
     if extraction is None:
         raise HTTPException(status_code=404, detail="Extraction not found")
@@ -438,8 +444,23 @@ def create_site_model_revision(
     )
     database.add(revision)
     database.flush()
+    table_rows: list[dict[str, Any]] = []
+    text_lines: list[str] = []
+    text_source: dict[str, Any] | None = None
     for item in extraction.content.get("items", []):
         value = item.get("value", {})
+        item_type = str(item.get("item_type", "unknown"))
+        if item_type == "text_line":
+            text_lines.append(str(value))
+            text_source = text_source or item.get("source")
+            continue
+        if item_type == "table_row" and isinstance(value, dict):
+            point = _table_row_point(value)
+            if point is None:
+                table_rows.append(value)
+                continue
+            value = {"point": point}
+            item_type = "point"
         geometry = None
         validation_status = "unmapped"
         if isinstance(value, dict) and any(
@@ -454,16 +475,63 @@ def create_site_model_revision(
                 validation_status = "invalid"
         entity = SiteModelEntity(
             revision_id=revision.id,
-            entity_type=str(item.get("item_type", "unknown")),
+            entity_type=item_type,
             geometry=geometry,
             properties=value if isinstance(value, dict) else {"value": value},
             source_reference=item.get("source"),
             validation_status=validation_status,
         )
         database.add(entity)
+    if text_lines:
+        database.add(
+            SiteModelEntity(
+                revision_id=revision.id,
+                entity_type="text",
+                properties={
+                    "line_count": len(text_lines),
+                    "sample_lines": text_lines[:20],
+                },
+                source_reference=text_source,
+                validation_status="unmapped",
+            )
+        )
+    if table_rows:
+        first_row = next(
+            item
+            for item in extraction.content.get("items", [])
+            if item.get("item_type") == "table_row"
+        )
+        database.add(
+            SiteModelEntity(
+                revision_id=revision.id,
+                entity_type="table",
+                properties={
+                    "row_count": len(table_rows),
+                    "columns": list(table_rows[0].keys()),
+                    "sample_rows": table_rows[:5],
+                },
+                source_reference=first_row.get("source"),
+                validation_status="unmapped",
+            )
+        )
     database.commit()
     database.refresh(revision)
     return revision
+
+
+def _table_row_point(row: dict[str, Any]) -> list[float] | None:
+    def find_value(names: tuple[str, ...]) -> float | None:
+        for key, value in row.items():
+            if key.strip().lower() in names:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    x = find_value(("x", "easting", "longitude", "lon"))
+    y = find_value(("y", "northing", "latitude", "lat"))
+    return [x, y] if x is not None and y is not None else None
 
 
 @router.get(
@@ -474,12 +542,25 @@ def list_site_model_revisions(
     project_id: str, database: Session = Depends(get_db)
 ) -> list[ProjectRevision]:
     get_project_or_404(project_id, database)
-    statement = (
-        select(ProjectRevision)
-        .where(ProjectRevision.project_id == project_id)
-        .order_by(ProjectRevision.revision_number.desc())
+    revisions = list(
+        database.scalars(
+            select(ProjectRevision)
+            .where(ProjectRevision.project_id == project_id)
+            .order_by(ProjectRevision.revision_number.desc())
+        )
     )
-    return list(database.scalars(statement))
+    active_jobs = set(
+        database.scalars(
+            select(ProcessingJob.id)
+            .join(SourceFile, SourceFile.id == ProcessingJob.source_file_id)
+            .where(SourceFile.project_id == project_id, SourceFile.deleted_at.is_(None))
+        )
+    )
+    return [
+        revision
+        for revision in revisions
+        if any(job_id in active_jobs for job_id in (revision.source_job_ids or []))
+    ]
 
 
 @router.get(
@@ -487,9 +568,15 @@ def list_site_model_revisions(
     response_model=list[SiteModelEntityResponse],
 )
 def list_site_model_entities(
-    project_id: str, revision_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    revision_id: str,
+    limit: int = 500,
+    offset: int = 0,
+    database: Session = Depends(get_db),
 ) -> list[SiteModelEntity]:
     get_project_or_404(project_id, database)
+    limit = max(1, min(limit, 2000))
+    offset = max(0, offset)
     revision = database.scalar(
         select(ProjectRevision).where(
             ProjectRevision.id == revision_id, ProjectRevision.project_id == project_id
@@ -497,9 +584,25 @@ def list_site_model_entities(
     )
     if revision is None:
         raise HTTPException(status_code=404, detail="Site-model revision not found")
-    return list(
-        database.scalars(select(SiteModelEntity).where(SiteModelEntity.revision_id == revision_id))
+    active_job = database.scalar(
+        select(ProcessingJob.id)
+        .join(SourceFile, SourceFile.id == ProcessingJob.source_file_id)
+        .where(
+            ProcessingJob.id.in_(revision.source_job_ids or []),
+            SourceFile.project_id == project_id,
+            SourceFile.deleted_at.is_(None),
+        )
     )
+    if active_job is None:
+        raise HTTPException(status_code=404, detail="Site-model revision is archived")
+    statement = (
+        select(SiteModelEntity)
+        .where(SiteModelEntity.revision_id == revision_id)
+        .order_by(SiteModelEntity.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(database.scalars(statement))
 
 
 @router.get("/projects/{project_id}/site-model/revisions/{revision_id}/compare/{other_revision_id}")
@@ -641,3 +744,47 @@ def read_calculation(
     if calculation is None:
         raise HTTPException(status_code=404, detail="Calculation not found")
     return calculation
+
+
+@router.post("/projects/{project_id}/summaries", response_model=SummaryResponse)
+def create_summary(
+    project_id: str, revision_id: str | None = None, database: Session = Depends(get_db)
+) -> ProjectSummary:
+    get_project_or_404(project_id, database)
+    entities = []
+    warnings = []
+    if revision_id:
+        entities = list(
+            database.scalars(
+                select(SiteModelEntity).where(SiteModelEntity.revision_id == revision_id)
+            )
+        )
+        warnings = [
+            entity.validation_status for entity in entities if entity.validation_status != "valid"
+        ]
+    content = MockAIProvider().summarize({"entities": entities, "warnings": warnings})
+    summary = ProjectSummary(project_id=project_id, revision_id=revision_id, content=content)
+    database.add(summary)
+    database.commit()
+    database.refresh(summary)
+    return summary
+
+
+@router.post("/projects/{project_id}/questions", response_model=QuestionResponse)
+def ask_question(
+    project_id: str, payload: QuestionRequest, database: Session = Depends(get_db)
+) -> QuestionAnswer:
+    get_project_or_404(project_id, database)
+    intent = route_question(payload.question)
+    answer = MockAIProvider().answer(payload.question, {"source_references": []})
+    question = QuestionAnswer(
+        project_id=project_id,
+        revision_id=payload.revision_id,
+        question=payload.question,
+        intent=intent,
+        answer=answer,
+    )
+    database.add(question)
+    database.commit()
+    database.refresh(question)
+    return question

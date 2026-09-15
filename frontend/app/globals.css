@@ -71,6 +71,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .list-heading { border-bottom: 2px solid var(--ink); display: flex; font: 700 11px Arial, sans-serif; justify-content: space-between; letter-spacing: .08em; padding-bottom: 10px; text-transform: uppercase; }
 .file-row { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 17px 0; }
 .file-row strong { display: block; font-size: 17px; font-weight: 400; margin-bottom: 6px; }
+.file-row small { overflow-wrap: anywhere; }
 .file-status { align-items: center; display: flex; font: 11px Arial, sans-serif; gap: 14px; text-transform: uppercase; }
 .file-status span { color: #17687e; }
 .file-status button { background: transparent; border: 1px solid var(--purple); color: var(--purple); font: 11px Arial, sans-serif; padding: 7px 9px; }
@@ -86,8 +87,14 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .workspace-section { border-top: 1px solid var(--line); margin-top: 40px; padding-top: 26px; }
 .section-heading { align-items: flex-start; display: flex; justify-content: space-between; }
 .section-heading h3 { font-size: 27px; margin: 8px 0 18px; }
+.revision-selector { color: var(--muted); display: flex; flex-direction: column; font: 11px Arial, sans-serif; gap: 7px; text-transform: uppercase; }
+.revision-selector select { background: var(--panel); border: 1px solid var(--blue); color: var(--ink); font: 14px Georgia, "Times New Roman", serif; max-width: 360px; padding: 9px 10px; text-transform: none; }
 .calculation-help { color: var(--muted); font: 12px/1.5 Arial, sans-serif; max-width: 620px; }
 .section-count { color: var(--muted); font: 11px Arial, sans-serif; padding-top: 25px; text-transform: uppercase; }
+.entity-pagination { align-items: center; display: flex; justify-content: space-between; margin-top: 18px; gap: 16px; }
+.entity-pagination-controls { align-items: center; display: flex; gap: 12px; }
+.entity-pagination-controls .secondary-button { border-color: var(--blue); color: var(--blue); font-weight: 700; }
+.entity-pagination-controls .secondary-button:hover:not(:disabled) { background: var(--blue); color: white; }
 .entity-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .entity-card { background: var(--panel); border-left: 3px solid var(--blue); display: flex; flex-direction: column; gap: 6px; padding: 14px; }
 .entity-card.invalid { border-left-color: #b84b43; }

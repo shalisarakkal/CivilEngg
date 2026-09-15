@@ -26,6 +26,34 @@ def test_text_and_csv_parsers_preserve_source_references() -> None:
     assert table.items[0].source.entity_id == "2"
 
 
+def test_delimited_txt_parsers_support_tab_pipe_and_space() -> None:
+    for delimiter in ("\t", "|", "  "):
+        data = delimiter.join(("1", "5000.2", "1000.2", "25.071"))
+        document = parse_text(
+            (data + "\n" + delimiter.join(("2", "5000.4", "1000.4", "25.109"))).encode(),
+            "points.txt",
+        )
+        assert document.parser_name == "text_table"
+        assert document.metadata["delimiter"] == (" " if delimiter == "  " else delimiter)
+        assert document.items[0].value["x"] == "5000.2"
+        assert document.items[0].value["y"] == "1000.2"
+
+
+def test_single_space_numeric_txt_rows_are_points() -> None:
+    document = parse_text(
+        b"1 5000.2 1000.2 25.071\n2 5000.4 1000.4 25.109\n",
+        "points_space.txt",
+    )
+
+    assert document.parser_name == "text_table"
+    assert document.items[0].value == {
+        "point_id": "1",
+        "x": "5000.2",
+        "y": "1000.2",
+        "elevation": "25.071",
+    }
+
+
 def test_pdf_parser_extracts_page_text(tmp_path: Path) -> None:
     path = tmp_path / "plan.pdf"
     writer = PdfWriter()

@@ -78,7 +78,8 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         revision_id = site_model.json()["id"]
         entities = client.get(f"/projects/{project_id}/site-model/revisions/{revision_id}/entities")
         assert entities.status_code == 200
-        assert entities.json()[0]["validation_status"] == "unmapped"
+        assert entities.json()[0]["entity_type"] == "text"
+        assert entities.json()[0]["properties"]["line_count"] == 1
         repeated_revision = client.post(
             f"/projects/{project_id}/site-model/revisions/from-extraction/{file_data['id']}"
         )
@@ -115,6 +116,17 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         )
         assert invalid_calculation.status_code == 400
 
+        summary = client.post(f"/projects/{project_id}/summaries")
+        assert summary.status_code == 200
+        assert "summary" in summary.json()["content"]
+        question = client.post(
+            f"/projects/{project_id}/questions",
+            json={"question": "What is the setback distance?"},
+        )
+        assert question.status_code == 200
+        assert question.json()["intent"] == "distance"
+        assert question.json()["answer"]["confidence"] == 0.0
+
         elevation = client.post(
             f"/projects/{project_id}/calculations",
             json={
@@ -129,6 +141,13 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         deleted = client.delete(f"/projects/{project_id}/files/{file_data['id']}")
         assert deleted.status_code == 204
         assert client.get(f"/projects/{project_id}/files").json() == []
+        assert client.get(f"/projects/{project_id}/site-model/revisions").json() == []
+        assert (
+            client.get(
+                f"/projects/{project_id}/site-model/revisions/{revision_id}/entities"
+            ).status_code
+            == 404
+        )
         archived = client.get("/admin/files/archived")
         assert archived.status_code == 200
         assert any(item["id"] == file_data["id"] for item in archived.json())

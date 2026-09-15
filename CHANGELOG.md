@@ -23,6 +23,9 @@ All notable project changes will be recorded here. Entries should describe user-
 - Native Circle geometry support for area and perimeter calculations.
 - Phase 6 idempotent revision acceptance and soft-delete file archiving with in-app confirmation.
 - Phase 6 admin archive restore/purge, revision comparison, elevation statistics, and geometry preview.
+- Phase 7 deterministic/mock source-grounded summaries and question-answer persistence.
+- CSV site-model acceptance now aggregates non-geometric table rows and maps coordinate rows to points instead of creating one unmapped entity per row.
+- TXT site-model acceptance now aggregates text lines into one text entity with line count and sample lines.
 
 ### Planned
 

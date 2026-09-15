@@ -117,6 +117,7 @@ class SiteModelRevisionResponse(BaseModel):
     revision_number: int
     created_at: datetime
     created_by: str | None
+    source_job_ids: list[object] | None
     notes: str | None
 
 
@@ -143,4 +144,27 @@ class CalculationResponse(BaseModel):
     unit: str
     assumptions: list[object] | None
     details: dict[str, object] | None
+    created_at: datetime
+
+
+class SummaryResponse(BaseModel):
+    id: str
+    project_id: str
+    revision_id: str | None
+    content: dict[str, object]
+    created_at: datetime
+
+
+class QuestionRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    revision_id: str | None = None
+
+
+class QuestionResponse(BaseModel):
+    id: str
+    project_id: str
+    revision_id: str | None
+    question: str
+    intent: str
+    answer: dict[str, object]
     created_at: datetime

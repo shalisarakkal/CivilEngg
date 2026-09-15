@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,9 @@ def parse_file(path: Path, original_name: str | None = None) -> NormalizedDocume
 
 def parse_text(data: bytes, file_name: str) -> NormalizedDocument:
     text, encoding = _decode(data)
+    delimited = _parse_delimited_text(text, file_name, encoding)
+    if delimited is not None:
+        return delimited
     document = NormalizedDocument(parser_name="text", text=text.splitlines())
     document.metadata = {"encoding": encoding, "line_count": len(document.text)}
     document.items = [
@@ -75,6 +79,85 @@ def parse_text(data: bytes, file_name: str) -> NormalizedDocument:
         if line.strip()
     ]
     return document
+
+
+def _parse_delimited_text(text: str, file_name: str, encoding: str) -> NormalizedDocument | None:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    delimiter = _detect_text_delimiter(lines[:20])
+    if delimiter is None:
+        return None
+    rows = [_split_delimited_line(line, delimiter) for line in lines]
+    if any(len(row) < 2 for row in rows):
+        return None
+    width = len(rows[0])
+    if any(len(row) != width for row in rows):
+        return None
+    headers = _headers_for_rows(rows[0], rows[1:])
+    data_rows = rows[1:] if any(not _is_number(value) for value in rows[0]) else rows
+    items = [
+        NormalizedItem(
+            "table_row",
+            dict(zip(headers, row, strict=True)),
+            SourceReference(file_name=file_name, entity_id=str(index)),
+        )
+        for index, row in enumerate(data_rows, start=2)
+    ]
+    return NormalizedDocument(
+        parser_name="text_table",
+        text=lines,
+        items=items,
+        metadata={
+            "encoding": encoding,
+            "delimiter": delimiter,
+            "columns": headers,
+            "row_count": len(items),
+        },
+    )
+
+
+def _detect_text_delimiter(lines: list[str]) -> str | None:
+    candidates = ["\t", "|", " "]
+    for delimiter in candidates:
+        counts = [len(_split_delimited_line(line, delimiter)) for line in lines if line.strip()]
+        if counts and counts[0] >= 2 and len(set(counts)) == 1:
+            return delimiter
+    numeric_rows = [re.split(r"\s+", line.strip()) for line in lines if line.strip()]
+    if numeric_rows and all(
+        len(row) == 4 and all(_is_number(value) for value in row) for row in numeric_rows
+    ):
+        return " "
+    return None
+
+
+def _split_delimited_line(line: str, delimiter: str) -> list[str]:
+    if delimiter == " ":
+        parts = [part for part in re.split(r"\s+", line.strip()) if part]
+        if len(parts) == 4 and all(_is_number(part) for part in parts):
+            return parts
+        return [part for part in re.split(r"\s{2,}", line.strip()) if part]
+    return [part.strip() for part in line.split(delimiter)]
+
+
+def _headers_for_rows(first_row: list[str], remaining_rows: list[list[str]]) -> list[str]:
+    normalized = [value.strip().lower() for value in first_row]
+    has_header = any(not _is_number(value) for value in first_row)
+    if has_header:
+        return [value or f"column_{index}" for index, value in enumerate(normalized, start=1)]
+    if len(first_row) == 4 and all(
+        _is_number(value) for row in remaining_rows[:3] for value in row
+    ):
+        return ["point_id", "x", "y", "elevation"]
+    return [f"column_{index}" for index in range(1, len(first_row) + 1)]
+
+
+def _is_number(value: str) -> bool:
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
 
 
 def parse_csv(data: bytes, file_name: str) -> NormalizedDocument:

@@ -43,6 +43,36 @@ def test_area_and_slope() -> None:
     assert slope["direction"] == "uphill"
 
 
+def test_closed_linestring_perimeter_includes_all_sides() -> None:
+    perimeter = calculate_perimeter(
+        {"type": "LineString", "coordinates": [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]},
+        "ft",
+        "ft",
+    )
+
+    assert perimeter["result"] == pytest.approx(40)
+
+
+def test_linestring_perimeter_uses_explicit_segments() -> None:
+    perimeter = calculate_perimeter(
+        {"type": "LineString", "coordinates": [[20, 0], [10, 0], [10, 10], [0, 10], [0, 0]]},
+        "ft",
+        "ft",
+    )
+
+    assert perimeter["result"] == pytest.approx(40)
+
+
+def test_polygon_perimeter_closes_the_boundary() -> None:
+    perimeter = calculate_perimeter(
+        {"type": "Polygon", "coordinates": [[[20, 0], [0, 0], [0, 10], [20, 10], [20, 0]]]},
+        "ft",
+        "ft",
+    )
+
+    assert perimeter["result"] == pytest.approx(60)
+
+
 def test_circle_area_and_perimeter_use_radius_units() -> None:
     circle = {"type": "Circle", "center": [100, 200], "radius": 25}
 

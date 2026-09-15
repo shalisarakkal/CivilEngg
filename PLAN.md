@@ -220,17 +220,17 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Define a provider interface for OpenAI and a deterministic local/mock provider for tests
-- [ ] Generate a structured site summary from the site model and extracted document text
+- [x] Define a provider interface for OpenAI and a deterministic local/mock provider for tests
+- [x] Generate a structured site summary from the site model and extracted document text
 - [ ] Add high-level, grading, drainage, and utilities summary sections when data exists
 - [ ] Generate attention flags for steep slopes, tight setbacks, missing data, and unusual elevations
-- [ ] Parse question intent for measurements such as setback distance and elevation
-- [ ] Route computable questions to deterministic geometry calculations first
+- [x] Parse question intent for measurements such as setback distance and elevation
+- [x] Route computable questions to deterministic geometry calculations first
 - [ ] Use retrieval of relevant source text and geometry context for explanatory responses
-- [ ] Return numeric answer, units, method, source reference, confidence/limitations, and timestamp
-- [ ] Clearly label unknown or insufficient-data answers
+- [x] Return numeric answer, units, method, source reference, confidence/limitations, and timestamp
+- [x] Clearly label unknown or insufficient-data answers
 - [ ] Add prompt-injection and untrusted-document handling rules
-- [ ] Store question and answer revisions without storing secrets
+- [x] Store question and answer revisions without storing secrets
 
 **Exit criteria:**
 
