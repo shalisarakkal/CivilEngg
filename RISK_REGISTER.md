@@ -4,6 +4,7 @@
 | --- | --- | --- | --- |
 | Parser extraction is incomplete | Incorrect or missing site data | Preserve warnings/source references and expose failed status | Active |
 | Missing or incorrect CRS | Incorrect geometry distances/areas | Require coordinate units, preserve CRS metadata, report transformation failures | Active |
+| Calculations assume planar (projected) coordinates | If a project's CRS is geographic (lat/lon degrees), distance/area/perimeter formulas (Euclidean, via Shapely) would silently compute nonsense values labeled with the chosen linear unit, since degrees are not a linear measure | Not yet enforced: found during the Phase 8 calculation review (VERIFY.md section 12). Document that supported project CRSs must be projected; validating/rejecting a geographic CRS at calculation time is still open | Open |
 | TIFF OCR is unavailable | Raster plans provide metadata only | Defer OCR to the vision phase and show a warning | Accepted limitation |
 | AI could invent engineering facts | Unsafe or unauditable answers | Route computable questions to deterministic calculations and require provenance; refuse with an explicit insufficient-data/ambiguous response otherwise | Mitigated |
 | Large or malformed uploads | Resource exhaustion or failed processing | 50 MB limit, MIME/extension validation, isolated failures | Mitigated |

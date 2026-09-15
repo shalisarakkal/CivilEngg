@@ -4,6 +4,7 @@ from civil_engineering.calculations import (
     CalculationError,
     calculate_area,
     calculate_distance,
+    calculate_elevation_statistics,
     calculate_perimeter,
     calculate_slope,
     convert_distance,
@@ -92,11 +93,43 @@ def test_circle_rejects_invalid_radius_and_center() -> None:
 
 
 def test_elevation_statistics() -> None:
-    from civil_engineering.calculations import calculate_elevation_statistics
-
     result = calculate_elevation_statistics([100, 102, 104], "ft")
     assert result["result"] == pytest.approx(102)
     assert result["statistics"] == {"minimum": 100, "maximum": 104, "average": 102, "count": 3}
+
+
+def test_slope_downhill_is_negative_with_a_ratio() -> None:
+    slope = calculate_slope(104, 100, 100, "ft")
+    assert slope["result"] == pytest.approx(-4)
+    assert slope["direction"] == "downhill"
+    assert slope["slope_ratio"] == pytest.approx(25)
+
+
+def test_slope_level_has_no_ratio() -> None:
+    slope = calculate_slope(100, 100, 50, "ft")
+    assert slope["result"] == pytest.approx(0)
+    assert slope["direction"] == "level"
+    assert slope["slope_ratio"] is None
+
+
+def test_distance_between_identical_points_is_zero() -> None:
+    result = calculate_distance(
+        {"type": "Point", "coordinates": [5, 5]},
+        {"type": "Point", "coordinates": [5, 5]},
+        "m",
+        "m",
+    )
+    assert result["result"] == pytest.approx(0)
+
+
+def test_elevation_statistics_supports_negative_and_below_datum_values() -> None:
+    result = calculate_elevation_statistics([-10, -5, 0], "ft")
+    assert result["statistics"] == {
+        "minimum": -10,
+        "maximum": 0,
+        "average": pytest.approx(-5),
+        "count": 3,
+    }
 
 
 def test_calculations_reject_invalid_inputs() -> None:
@@ -110,3 +143,11 @@ def test_calculations_reject_invalid_inputs() -> None:
         calculate_perimeter({"type": "Point", "coordinates": [0, 0]}, "ft", "ft")
     with pytest.raises(CalculationError, match="LineString geometry cannot be used for area"):
         calculate_area({"type": "LineString", "coordinates": [[0, 0], [10, 0]]}, "ft", "ft")
+    with pytest.raises(CalculationError, match="greater than zero"):
+        calculate_slope(100, 104, -10, "ft")
+    with pytest.raises(CalculationError, match="finite non-negative"):
+        convert_distance(-5, "ft", "m")
+
+
+def test_convert_distance_accepts_zero_as_a_boundary_value() -> None:
+    assert convert_distance(0, "ft", "m") == pytest.approx(0)

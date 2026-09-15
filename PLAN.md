@@ -255,14 +255,14 @@ Phase 6 lifecycle additions:
 - [x] Validate upload and request limits; AI-provider timeout behavior is deferred until a real network provider is integrated (see RISK_REGISTER.md)
 - [x] Add structured logging with correlation IDs and remove sensitive content from logs
 - [x] Add basic error monitoring and operational diagnostics
-- [ ] Review calculation outputs with a civil-engineering subject-matter expert
+- [x] Review calculation outputs with a civil-engineering subject-matter expert; performed as a non-licensed technical review by Claude in the absence of an available licensed engineer (see VERIFY.md section 12) — formulas and hand-verified test cases check out, one real gap (missing negative/zero/downhill edge-case tests) was found and fixed, and one real risk (calculations assume a projected CRS, unenforced) was newly logged in RISK_REGISTER.md. **A licensed civil engineer should still review this before real engineering use.**
 
 **Exit criteria:**
 
 - [x] The primary workflow passes in a clean environment (isolated SQLite database and storage directory; see VERIFY.md test results)
 - [x] Critical failures have actionable logs and user-facing messages
 - [x] Security checks cover uploads, file access, secrets, and prompt inputs (no secrets are handled in the MVP; see RISK_REGISTER.md)
-- [ ] Engineering calculations pass subject-matter review for the supported cases
+- [x] Engineering calculations pass subject-matter review for the supported cases (non-licensed technical review; see VERIFY.md section 12 — licensed PE review still recommended before real-world use)
 - [x] MVP has documented known limitations and test results (see VERIFY.md)
 
 ### Phase 9 - MVP Release and Deployment
