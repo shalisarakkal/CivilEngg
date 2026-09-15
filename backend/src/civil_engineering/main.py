@@ -22,7 +22,7 @@ settings = get_settings()
 app = FastAPI(title="Civil Engineering AI API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
+    allow_origins=settings.cors_allowed_origin_list,
     allow_methods=["*"],
     allow_headers=["*"],
 )

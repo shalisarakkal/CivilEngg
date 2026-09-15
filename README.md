@@ -76,6 +76,8 @@ The frontend runs at `http://localhost:3000` and the backend health endpoint is 
 
 All database-backed features work out of the box against the default SQLite database; no separate database service needs to be running for local development or tests.
 
+Running either server on a different port than the defaults above requires updating two settings in `.env`: `NEXT_PUBLIC_API_URL` (so the frontend calls the right backend address) and `CORS_ALLOWED_ORIGINS` (so the backend accepts requests from the frontend's actual origin).
+
 Do not commit secrets. Use a local environment file based on `.env.example`.
 
 ## Scope Rule
