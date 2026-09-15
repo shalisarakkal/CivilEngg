@@ -72,6 +72,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .file-row { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 17px 0; }
 .file-row strong { display: block; font-size: 17px; font-weight: 400; margin-bottom: 6px; }
 .file-row small { overflow-wrap: anywhere; }
+.file-row .file-error { color: #b84b43; display: block; margin-top: 4px; text-transform: none; }
 .file-status { align-items: center; display: flex; font: 11px Arial, sans-serif; gap: 14px; text-transform: uppercase; }
 .file-status span { color: #17687e; }
 .file-status button { background: transparent; border: 1px solid var(--purple); color: var(--purple); font: 11px Arial, sans-serif; padding: 7px 9px; }

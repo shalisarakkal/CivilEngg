@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from civil_engineering.database import Base
@@ -58,6 +58,9 @@ class Project(Base):
 
 class SourceFile(Base):
     __tablename__ = "source_files"
+    __table_args__ = (
+        UniqueConstraint("project_id", "checksum", name="uq_source_files_project_checksum"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(
@@ -67,7 +70,7 @@ class SourceFile(Base):
     stored_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     media_type: Mapped[str] = mapped_column(String(150), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
-    checksum: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -32,6 +32,11 @@ All notable project changes will be recorded here. Entries should describe user-
 - Phase 6 calculation-to-geometry highlighting: selecting a calculation result highlights the site-model geometry it references (switching revisions if needed) or explains when a calculation type has no associated geometry.
 - Playwright browser tests covering upload, calculation, and error states, run via `npm run test:e2e`.
 - Fixed `createProject`, `uploadFile`, and `createCalculation` leaving the UI permanently disabled after a network failure by adding the same try/catch/finally handling already used elsewhere; the project-creation status message now renders even before a project is selected.
+- Phase 8 request correlation IDs (`X-Request-ID`), structured request logging, and a JSON error response with request id for unhandled exceptions instead of a bare "Internal Server Error" body.
+- Phase 8 request-body size limit (2 MB) for non-upload endpoints, and a `/health` database-connectivity check.
+- Fixed a race condition where concurrent uploads of the same file content could all succeed instead of only the first: added a database-level unique constraint on (project, checksum) and a matching migration, with the duplicate-upload response now also covering the concurrent case.
+- Added a "Retry" action for files stuck in `failed` or `processing` status (e.g. after an interrupted server process), and surfaced the stored processing error message in the file list.
+- Added unit tests for path-traversal and unsafe-filename rejection in local storage, and API-level tests for malformed-file processing, interrupted-job recovery, and concurrent duplicate uploads.
 
 ### Planned
 

@@ -5,6 +5,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from civil_engineering.ai_service import MockAIProvider, route_question
@@ -200,7 +201,14 @@ async def upload_file(
     source_file.size_bytes = size
     source_file.checksum = checksum
     database.add(source_file)
-    database.commit()
+    try:
+        database.commit()
+    except IntegrityError as error:
+        database.rollback()
+        remove_file(str(path))
+        raise HTTPException(
+            status_code=409, detail="A file with the same content already exists in this project"
+        ) from error
     database.refresh(source_file)
     return source_file
 
