@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from civil_engineering import storage
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 from civil_engineering.models import ProcessingJob, SourceFile
@@ -102,6 +103,24 @@ def test_malformed_pdf_fails_gracefully_without_crashing_the_server(
 
         # The server must still be responsive after a parser failure.
         assert client.get("/health").status_code == 200
+    finally:
+        _teardown()
+
+
+def test_oversized_file_upload_is_rejected_through_the_api(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(storage, "MAX_FILE_SIZE", 10)
+    try:
+        project = client.post("/projects", json={"name": "Large File Site"}).json()
+
+        uploaded = client.post(
+            f"/projects/{project['id']}/files",
+            files={"file": ("survey.csv", b"x" * 100, "text/csv")},
+        )
+        assert uploaded.status_code == 400
+        assert client.get(f"/projects/{project['id']}/files").json() == []
     finally:
         _teardown()
 

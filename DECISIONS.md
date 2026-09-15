@@ -34,11 +34,18 @@ This file records decisions that affect the project direction. Add a date, conte
 - **Decision:** Store site-model output as revisions rather than overwriting the active model without history.
 - **Consequence:** APIs and calculations must identify the revision used to produce a result.
 
+## ADR-005: No Authentication for the MVP; Single-User Local Deployment
+
+- **Status:** Accepted
+- **Date:** 2026-09-15
+- **Context:** Phase 8 hardening asked whether authorization boundaries were needed. The application is intended to run locally for a single user, per the Phase 0 scope decision and ARCHITECTURE.md.
+- **Decision:** Ship the MVP without authentication or multi-user authorization boundaries. The API is not intended to be exposed beyond local use.
+- **Consequence:** RISK_REGISTER.md records the unauthenticated local API as an accepted limitation. Authentication, authorization, and multi-user access remain post-MVP work (see the Post-MVP Roadmap).
+
 ## Proposed Decisions
 
 - Database migration tool
 - Exact frontend component and map libraries
 - Background job mechanism
-- Authentication boundary
 - Supported coordinate reference systems
 - DWG parsing strategy

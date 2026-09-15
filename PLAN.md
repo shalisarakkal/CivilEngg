@@ -247,14 +247,14 @@ Phase 6 lifecycle additions:
 **Work items:**
 
 - [ ] Add end-to-end Playwright coverage for create project, upload, process, inspect, calculate, and ask
-- [ ] Add API integration tests using an isolated test database and file directory
-- [ ] Test restart and recovery behavior for interrupted processing jobs
-- [ ] Test large files, malformed files, duplicate files, and concurrent requests
-- [ ] Add authorization boundaries if multi-user access is enabled
-- [ ] Protect local file paths against traversal and unsafe filenames
-- [ ] Validate upload limits, request limits, and AI-provider timeout behavior
-- [ ] Add structured logging with correlation IDs and remove sensitive content from logs
-- [ ] Add basic error monitoring and operational diagnostics
+- [x] Add API integration tests using an isolated test database and file directory
+- [x] Test restart and recovery behavior for interrupted processing jobs
+- [x] Test large files, malformed files, duplicate files, and concurrent requests
+- [x] Add authorization boundaries if multi-user access is enabled; not applicable for the MVP (ADR-005: single-user local deployment, no multi-user access)
+- [x] Protect local file paths against traversal and unsafe filenames
+- [x] Validate upload and request limits; AI-provider timeout behavior is deferred until a real network provider is integrated (see RISK_REGISTER.md)
+- [x] Add structured logging with correlation IDs and remove sensitive content from logs
+- [x] Add basic error monitoring and operational diagnostics
 - [ ] Review calculation outputs with a civil-engineering subject-matter expert
 
 **Exit criteria:**
