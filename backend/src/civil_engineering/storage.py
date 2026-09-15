@@ -6,7 +6,7 @@ from fastapi import UploadFile
 
 from civil_engineering.config import get_settings
 
-ALLOWED_EXTENSIONS = {".pdf", ".dxf", ".csv", ".txt", ".tif", ".tiff"}
+ALLOWED_EXTENSIONS = {".pdf", ".dxf", ".csv", ".txt", ".tif", ".tiff", ".xml"}
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
@@ -67,6 +67,7 @@ def _content_type_matches(extension: str, content_type: str) -> bool:
         ".txt": {"text/plain", "application/octet-stream"},
         ".tif": {"image/tiff", "application/octet-stream"},
         ".tiff": {"image/tiff", "application/octet-stream"},
+        ".xml": {"application/xml", "text/xml", "application/octet-stream", "text/plain"},
     }
     return content_type.lower() in accepted[extension]
 

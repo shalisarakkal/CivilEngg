@@ -43,7 +43,7 @@ Expected results:
 - Next.js production build succeeds
 - Backend tests pass
 
-The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF extraction, site-model geometry, deterministic calculations, elevation statistics, and archive lifecycle behavior.
+The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF, LandXML extraction, site-model geometry, deterministic calculations, elevation statistics, and archive lifecycle behavior.
 
 ## 3. Verify PostgreSQL/PostGIS
 
@@ -162,7 +162,7 @@ You should see the Project Workspace screen with:
 1. Enter a project name such as `Manual Verification Site`.
 2. Select the `+` button.
 3. Confirm the project appears in the project list.
-4. Select a `.txt`, `.csv`, `.pdf`, `.dxf`, `.tif`, or `.tiff` file.
+4. Select a `.txt`, `.csv`, `.pdf`, `.dxf`, `.tif`, `.tiff`, or `.xml` (LandXML) file.
 5. Upload it.
 6. Confirm the file appears with `queued` status.
 7. Select `Process`.
@@ -334,6 +334,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 ## 10. Current Scope Limitations
 
 - TIFF/TIF metadata is supported; TIFF OCR is deferred.
+- LandXML parsing (Phase 9) covers `CgPoints`, surface `Pnts`/`P` points, and straight alignment `Line` segments; curved (`Curve`/`Spiral`) alignment segments and surface triangulation (`Faces`) are not extracted. The parser assumes the common "northing easting [elevation]" coordinate order (see RISK_REGISTER.md); a producer using the reverse order would silently swap X/Y.
 - DOCX parsing is optional and not implemented unless sample requirements require it.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.

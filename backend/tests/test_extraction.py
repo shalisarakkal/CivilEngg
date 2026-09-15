@@ -10,6 +10,7 @@ from civil_engineering.extraction import (
     parse_csv,
     parse_dxf,
     parse_file,
+    parse_landxml,
     parse_pdf,
     parse_text,
     parse_tiff,
@@ -90,6 +91,79 @@ def test_tiff_parser_extracts_raster_metadata(tmp_path: Path) -> None:
     assert document.metadata["width"] == 640
     assert document.metadata["height"] == 480
     assert document.warnings == ["OCR is not enabled for TIFF images"]
+
+
+def test_landxml_parser_extracts_points_and_alignment_lines() -> None:
+    data = """<?xml version="1.0"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2">
+  <CgPoints>
+    <CgPoint name="1">1000.00 5000.00 100.00</CgPoint>
+    <CgPoint name="2">1000.00 5100.00 101.00</CgPoint>
+  </CgPoints>
+  <Surfaces>
+    <Surface name="EG">
+      <Definition surfType="TIN">
+        <Pnts>
+          <P id="3">1002.00 5002.00 102.00</P>
+        </Pnts>
+      </Definition>
+    </Surface>
+  </Surfaces>
+  <Alignments>
+    <Alignment name="Centerline">
+      <CoordGeom>
+        <Line>
+          <Start>1000.00 5000.00</Start>
+          <End>1000.00 5100.00</End>
+        </Line>
+        <Curve>
+          <Start>1000.00 5100.00</Start>
+          <End>1010.00 5150.00</End>
+        </Curve>
+      </CoordGeom>
+    </Alignment>
+  </Alignments>
+</LandXML>
+"""
+    document = parse_landxml(data, "corridor.xml")
+    assert document.parser_name == "landxml"
+    assert document.metadata == {"point_count": 3, "alignment_line_count": 1}
+
+    points = [item for item in document.items if item.item_type == "point"]
+    assert {tuple(item.value["point"]) for item in points} == {
+        (5000.0, 1000.0, 100.0),
+        (5100.0, 1000.0, 101.0),
+        (5002.0, 1002.0, 102.0),
+    }
+    cg_point = next(item for item in points if item.source.entity_type == "CgPoint")
+    assert cg_point.source.entity_id == "1"
+    surface_point = next(item for item in points if item.source.entity_type == "P")
+    assert surface_point.source.entity_id == "3"
+
+    line = next(item for item in document.items if item.item_type == "line")
+    assert line.value == {"start": [5000.0, 1000.0], "end": [5100.0, 1000.0]}
+    assert line.source.entity_type == "alignment_line"
+    assert any("Curve" in warning for warning in document.warnings)
+
+
+def test_landxml_parser_rejects_malformed_or_non_landxml_input() -> None:
+    with pytest.raises(ExtractionError, match="LandXML could not be read"):
+        parse_landxml("not xml", "broken.xml")
+    with pytest.raises(ExtractionError, match="not a LandXML document"):
+        parse_landxml("<Other/>", "other.xml")
+    with pytest.raises(ExtractionError, match="no supported"):
+        parse_landxml("<LandXML/>", "empty.xml")
+
+
+def test_parse_file_dispatches_landxml_by_extension(tmp_path: Path) -> None:
+    path = tmp_path / "site.xml"
+    path.write_text(
+        '<LandXML><CgPoints><CgPoint name="1">10 20 30</CgPoint></CgPoints></LandXML>',
+        encoding="utf-8",
+    )
+    document = parse_file(path, "site.xml")
+    assert document.parser_name == "landxml"
+    assert document.items[0].value["point"] == [20.0, 10.0, 30.0]
 
 
 def test_parser_rejects_unsupported_or_malformed_input(tmp_path: Path) -> None:

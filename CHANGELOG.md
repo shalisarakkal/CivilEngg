@@ -43,7 +43,7 @@ All notable project changes will be recorded here. Entries should describe user-
 - Documented current known limitations and a test-results summary in VERIFY.md for the Phase 8 exit criteria.
 - Completed Phase 8 with a non-licensed technical review of the calculation engine (VERIFY.md section 12): verified every formula against standard civil-engineering/geometry definitions and hand-verified test cases, added missing edge-case tests (downhill/level slope, negative elevations, zero distance, negative-input rejection), and logged a newly found risk that calculations assume a projected CRS with nothing yet enforcing it. A licensed PE review is still recommended before real engineering use.
 - Re-planned PLAN.md's remaining phases after auditing Requirements.md against the shipped implementation: found seven capabilities from the original requirements (LandXML, label-to-geometry linking, key-phrase extraction, bearing/COGO parsing, semantic site-model classification, directional questions, and plan-sheet snippets) that were never explicitly built or explicitly deferred. Moved release/deployment work to a renamed Phase Z and inserted a new Phase 9 to close these gaps beforehand.
-
+- Phase 9: added LandXML parsing (`.xml` uploads) to the extraction pipeline, using the standard library's XML parser (no new dependency). Extracts `CgPoints` and surface `Pnts`/`P` points, and straight `Line` segments from alignment `CoordGeom`; curved (`Curve`/`Spiral`) alignment segments are explicitly skipped with a warning rather than approximated, consistent with the project's rule against inventing geometry. Points and lines flow through the same site-model acceptance path as the other parsers.
 ### Planned
 
 - Project scaffolding and local development commands.

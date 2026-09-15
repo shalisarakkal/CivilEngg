@@ -284,6 +284,7 @@ def process_file(
         ".txt",
         ".tif",
         ".tiff",
+        ".xml",
     }:
         source_file.status = "unsupported"
         database.commit()

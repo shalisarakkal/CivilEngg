@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 
 @dataclass
@@ -61,6 +62,8 @@ def parse_file(path: Path, original_name: str | None = None) -> NormalizedDocume
         return parse_dxf(path.read_text(encoding="utf-8", errors="replace"), source_name)
     if suffix in {".tif", ".tiff"}:
         return parse_tiff(path.read_bytes(), source_name)
+    if suffix == ".xml":
+        return parse_landxml(path.read_text(encoding="utf-8", errors="replace"), source_name)
     raise ExtractionError(f"Unsupported extraction type: {suffix or 'unknown'}")
 
 
@@ -233,6 +236,103 @@ def parse_dxf(data: str, file_name: str) -> NormalizedDocument:
         document.items.append(NormalizedItem(entity_type.lower(), value, source))
     document.metadata = {"entity_count": len(document.items)}
     return document
+
+
+_LANDXML_POINT_TAGS = {"CgPoint", "P"}
+
+
+def parse_landxml(data: str, file_name: str) -> NormalizedDocument:
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError as error:
+        raise ExtractionError(f"LandXML could not be read: {error}") from error
+    if _local_tag(root) != "LandXML":
+        raise ExtractionError("File is not a LandXML document")
+
+    document = NormalizedDocument(parser_name="landxml")
+    for element in root.iter():
+        tag = _local_tag(element)
+        if tag not in _LANDXML_POINT_TAGS:
+            continue
+        coordinates = _landxml_coordinates(element.text)
+        if coordinates is None:
+            document.warnings.append(
+                f"Skipped {tag} with missing or unparsable coordinates: {element.text!r}"
+            )
+            continue
+        point_id = element.get("name") or element.get("id") or ""
+        source = SourceReference(file_name=file_name, entity_type=tag, entity_id=point_id)
+        document.items.append(NormalizedItem("point", {"point": coordinates}, source))
+
+    for alignment in root.iter():
+        if _local_tag(alignment) != "Alignment":
+            continue
+        _extract_landxml_alignment(alignment, file_name, document)
+
+    point_count = sum(1 for item in document.items if item.item_type == "point")
+    line_count = sum(1 for item in document.items if item.item_type == "line")
+    if point_count == 0 and line_count == 0:
+        raise ExtractionError(
+            "LandXML file contains no supported CgPoints, surface points, or alignment lines"
+        )
+    document.metadata = {"point_count": point_count, "alignment_line_count": line_count}
+    return document
+
+
+def _extract_landxml_alignment(
+    alignment: ElementTree.Element, file_name: str, document: NormalizedDocument
+) -> None:
+    name = alignment.get("name", "")
+    for coord_geom in alignment:
+        if _local_tag(coord_geom) != "CoordGeom":
+            continue
+        for index, segment in enumerate(coord_geom, start=1):
+            segment_tag = _local_tag(segment)
+            if segment_tag == "Line":
+                start = end = None
+                for child in segment:
+                    child_tag = _local_tag(child)
+                    if child_tag == "Start":
+                        start = _landxml_coordinates(child.text)
+                    elif child_tag == "End":
+                        end = _landxml_coordinates(child.text)
+                if start is None or end is None:
+                    document.warnings.append(
+                        f"Alignment '{name}' segment {index} (Line) is missing Start/End "
+                        "coordinates"
+                    )
+                    continue
+                source = SourceReference(
+                    file_name=file_name,
+                    entity_type="alignment_line",
+                    entity_id=f"{name}:{index}",
+                )
+                document.items.append(NormalizedItem("line", {"start": start, "end": end}, source))
+            elif segment_tag in {"Curve", "Spiral"}:
+                document.warnings.append(
+                    f"Alignment '{name}' segment {index} ({segment_tag}) was not extracted: "
+                    "curved alignment geometry is not supported, only straight Line segments"
+                )
+
+
+def _local_tag(element: ElementTree.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _landxml_coordinates(text: str | None) -> list[float] | None:
+    if not text:
+        return None
+    parts = text.split()
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        values = [float(part) for part in parts]
+    except ValueError:
+        return None
+    # LandXML coordinate order is northing, easting, [elevation]; convert to this
+    # app's (x=easting, y=northing, [z=elevation]) convention used everywhere else.
+    northing, easting, *elevation = values
+    return [easting, northing, *elevation]
 
 
 def parse_tiff(data: bytes, file_name: str) -> NormalizedDocument:

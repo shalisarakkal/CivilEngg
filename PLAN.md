@@ -271,7 +271,7 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Add LandXML parsing to the extraction pipeline (points and surfaces/alignments where present), producing the same normalized document representation used by the other parsers
+- [x] Add LandXML parsing to the extraction pipeline (points and surfaces/alignments where present), producing the same normalized document representation used by the other parsers
 - [ ] Link extracted text labels (e.g. "FF=102.50", "Top of curb 101.80") to nearby geometry by spatial proximity, and preserve that link as a source reference
 - [ ] Extract key phrases from narrative text (e.g. "setback", "finished floor elevation") during document parsing and surface them as searchable site-model annotations, rather than only matching keywords in the user's question
 - [ ] Parse bearing/distance (COGO) values for parcel boundary segments where present in DXF/CSV/LandXML input, in addition to the raw coordinates already extracted
@@ -281,7 +281,7 @@ Phase 6 lifecycle additions:
 
 **Exit criteria:**
 
-- [ ] A LandXML fixture can be ingested and produces site-model entities
+- [x] A LandXML fixture can be ingested and produces site-model entities
 - [ ] At least one extracted label is correctly linked to its nearest geometry entity with a traceable source reference
 - [ ] Key phrases extracted from a sample document are retrievable and shown in the UI
 - [ ] At least one parcel boundary case demonstrates bearing/distance-derived geometry alongside raw coordinates
