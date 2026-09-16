@@ -70,6 +70,50 @@ test("create project, upload, process, inspect, calculate, and ask", async ({ pa
   await expect(page.getByText("Site model contains 2 extracted entities.")).toBeVisible();
 });
 
+test("batch-accepting revisions for multiple files creates one distinct revision per file", async ({ page }) => {
+  const projectName = uniqueName("E2E Batch Accept Site");
+
+  await page.goto("/");
+  await page.getByLabel("New project").fill(projectName);
+  await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "batch-a.csv", mimeType: "text/csv", buffer: Buffer.from("x,y\n0,0\n1,1\n") },
+    { name: "batch-b.csv", mimeType: "text/csv", buffer: Buffer.from("x,y\n2,2\n3,3\n") },
+    { name: "batch-c.csv", mimeType: "text/csv", buffer: Buffer.from("x,y\n4,4\n5,5\n") },
+  ]);
+  await page.getByRole("button", { name: "Upload files" }).click();
+  await expect(page.getByText("3 file(s) uploaded and queued for processing.")).toBeVisible();
+
+  await page.locator(".list-heading .select-all input").check();
+  await page.getByRole("button", { name: "Process selected" }).click();
+  await expect(page.getByText("3 file(s) processed.")).toBeVisible();
+
+  await page.locator(".list-heading .select-all input").check();
+  await page.getByRole("button", { name: "Accept selected" }).click();
+
+  // No skips and nothing already accepted, so this is the plain (pre-skip)
+  // wording path in summarizeBatchResult, not the "N file(s): ..." one.
+  await expect(page.getByText("3 file(s) accepted.")).toBeVisible();
+
+  // Every row independently reflects the accept, same as three individual
+  // "Accept revision" clicks would -- proving the sequential batch produced
+  // three distinct revisions rather than colliding on the same one.
+  const acceptedButtons = page.getByRole("button", { name: "Revision accepted" });
+  await expect(acceptedButtons).toHaveCount(3);
+
+  // Three distinct, sequentially-numbered revisions -- not two accepts
+  // colliding on the same revision_number, the historical bug this
+  // sequential (not parallel) batch implementation exists to avoid.
+  const revisionOptions = page.locator(".revision-selector select option");
+  await expect(revisionOptions).toHaveCount(3);
+  const optionTexts = await revisionOptions.allTextContents();
+  expect(optionTexts.some((text) => text.includes("Revision 1 ·"))).toBe(true);
+  expect(optionTexts.some((text) => text.includes("Revision 2 ·"))).toBe(true);
+  expect(optionTexts.some((text) => text.includes("Revision 3 ·"))).toBe(true);
+});
+
 test("asking a question with no accepted revision refuses to invent an answer", async ({ page }) => {
   const projectName = uniqueName("E2E No-Data Site");
 

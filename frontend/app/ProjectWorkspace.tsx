@@ -74,7 +74,7 @@ function fileTypeGroup(name: string): string {
   return extension === "tiff" ? "tif" : extension;
 }
 
-type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number };
+type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number; skipped?: boolean };
 
 // Browsers deliberately never expose a selected/dropped file's filesystem
 // path (only its name) as a privacy/security measure, so this is the most
@@ -86,13 +86,24 @@ function formatFileSize(bytes: number): string {
 function summarizeBatchResult(verb: string, results: BatchResult[]): string {
   if (results.length === 1) {
     const [only] = results;
+    if (only.skipped) return `${only.name} skipped: ${only.detail}`;
     return only.ok ? `${only.name} ${verb}.` : `${only.name} could not be ${verb}: ${only.detail}`;
   }
-  const succeeded = results.filter((result) => result.ok).length;
-  const failed = results.length - succeeded;
-  if (failed === 0) return `${succeeded} file(s) ${verb}.`;
-  if (succeeded === 0) return `All ${failed} file(s) failed to be ${verb}.`;
-  return `${succeeded} of ${results.length} file(s) ${verb}, ${failed} failed.`;
+  const skipped = results.filter((result) => result.skipped).length;
+  const succeeded = results.filter((result) => result.ok && !result.skipped).length;
+  const failed = results.length - succeeded - skipped;
+  if (skipped === 0) {
+    // Unchanged from before "skipped" existed (no caller other than batch
+    // accept-revision ever produces a skipped result).
+    if (failed === 0) return `${succeeded} file(s) ${verb}.`;
+    if (succeeded === 0) return `All ${failed} file(s) failed to be ${verb}.`;
+    return `${succeeded} of ${results.length} file(s) ${verb}, ${failed} failed.`;
+  }
+  const clauses: string[] = [];
+  if (succeeded > 0) clauses.push(`${succeeded} ${verb}`);
+  if (skipped > 0) clauses.push(`${skipped} skipped`);
+  if (failed > 0) clauses.push(`${failed} failed`);
+  return `${results.length} file(s): ${clauses.join(", ")}.`;
 }
 
 // Selecting files (via the picker or a drop) is not itself an upload attempt,
@@ -112,10 +123,11 @@ function summarizeSelection(results: BatchResult[]): string {
 
 function groupBatchResults(results: BatchResult[], successLabel: string): { label: string; items: BatchResult[] }[] {
   const groups: { label: string; items: BatchResult[] }[] = [
-    { label: successLabel, items: results.filter((result) => result.ok) },
-    { label: "Duplicate file", items: results.filter((result) => !result.ok && result.reason === "duplicate") },
-    { label: "Not supported", items: results.filter((result) => !result.ok && result.reason === "rejected") },
-    { label: "Failed", items: results.filter((result) => !result.ok && !result.reason) },
+    { label: successLabel, items: results.filter((result) => result.ok && !result.skipped) },
+    { label: "Skipped", items: results.filter((result) => result.skipped) },
+    { label: "Duplicate file", items: results.filter((result) => !result.ok && !result.skipped && result.reason === "duplicate") },
+    { label: "Not supported", items: results.filter((result) => !result.ok && !result.skipped && result.reason === "rejected") },
+    { label: "Failed", items: results.filter((result) => !result.ok && !result.skipped && !result.reason) },
   ];
   return groups.filter((group) => group.items.length > 0);
 }
@@ -890,6 +902,62 @@ export default function ProjectWorkspace() {
     }
   }
 
+  async function acceptSelectedFiles() {
+    if (!selectedProject || selectedFileIds.size === 0 || batchBusy !== null || acceptingFileId !== null) return;
+    const targets = files.filter((file) => selectedFileIds.has(file.id));
+    setBatchBusy("accept");
+    setMessage(`Accepting revisions for ${targets.length} file(s)...`);
+    const results: BatchResult[] = [];
+    let firstAcceptedRevisionId: string | null = null;
+    try {
+      // Sequential on purpose, unlike the other batch actions' Promise.all:
+      // accepting assigns the next revision_number for the project, and the
+      // backend already has retry-on-conflict handling for the case where
+      // two accepts race for the same number (a real bug once). Running
+      // these one at a time avoids relying on that retry path under real
+      // concurrency instead of just not creating the race in the first place.
+      for (const file of targets) {
+        if (acceptedFileIds.includes(file.id)) {
+          results.push({ name: file.original_name, ok: true, skipped: true, detail: "Revision already accepted" });
+          continue;
+        }
+        if (file.status !== "completed") {
+          results.push({ name: file.original_name, ok: true, skipped: true, detail: `File is not completed (status: ${file.status})` });
+          continue;
+        }
+        try {
+          const response = await fetch(
+            `${apiUrl}/projects/${selectedProject.id}/site-model/revisions/from-extraction/${file.id}`,
+            { method: "POST" },
+          );
+          if (response.ok) {
+            const revision: Revision = await response.json();
+            setRevisions((current) => [revision, ...current.filter((item) => item.id !== revision.id)]);
+            setAcceptedFileIds((current) => (current.includes(file.id) ? current : [...current, file.id]));
+            if (firstAcceptedRevisionId === null) firstAcceptedRevisionId = revision.id;
+            results.push({ name: file.original_name, ok: true, detail: "" });
+          } else {
+            const error = await response.json().catch(() => ({}));
+            results.push({ name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` });
+          }
+        } catch (error) {
+          results.push({ name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" });
+        }
+      }
+      // Only navigate the Site model section to a newly-accepted revision if
+      // nothing was already selected there; a batch action shouldn't yank
+      // the view away from whatever the user was already looking at.
+      if (firstAcceptedRevisionId && !selectedRevisionId) {
+        setSelectedRevisionId(firstAcceptedRevisionId);
+        await loadEntities(selectedProject.id, firstAcceptedRevisionId);
+      }
+      setMessage(summarizeBatchResult("accepted", results), results.length > 1 ? results : null, "Accepted");
+    } finally {
+      setSelectedFileIds(new Set());
+      setBatchBusy(null);
+    }
+  }
+
   async function createCalculation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProject) return;
@@ -1108,12 +1176,13 @@ export default function ProjectWorkspace() {
               {selectedFileIds.size > 0 && <div className="batch-toolbar">
                 <span>{selectedFileIds.size} selected</span>
                 <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => void processSelectedFiles()}>{batchBusy === "process" ? "Processing..." : "Process selected"}</button>
+                <button type="button" className="secondary-button" disabled={batchBusy !== null || acceptingFileId !== null} onClick={() => void acceptSelectedFiles()}>{batchBusy === "accept" ? "Accepting..." : "Accept selected"}</button>
                 <button type="button" className="danger-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(files.filter((file) => selectedFileIds.has(file.id)))}>Archive selected</button>
                 <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => setSelectedFileIds(new Set())}>Clear selection</button>
               </div>}
               {files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}
               {files.length > 0 && visibleFiles.length === 0 && <p className="muted">No files match the current filter.</p>}
-              {visibleFiles.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><label className="file-select"><input type="checkbox" checked={selectedFileIds.has(file.id)} onChange={() => toggleFileSelection(file.id)} disabled={batchBusy !== null} /></label><div className="file-info"><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null || batchBusy !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" disabled={batchBusy !== null} onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}` || batchBusy !== null} onClick={() => void deleteFile(file)}>Delete</button></div></div>; })}
+              {visibleFiles.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><label className="file-select"><input type="checkbox" checked={selectedFileIds.has(file.id)} onChange={() => toggleFileSelection(file.id)} disabled={batchBusy !== null} /></label><div className="file-info"><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null || batchBusy !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" disabled={batchBusy !== null} onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}` || batchBusy !== null} onClick={() => void deleteFile(file)}>Archive</button></div></div>; })}
             </div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}<span className="result-inputs">{formatCalculationInputs(calculation.inputs)}</span></small></button>)}</div>}</section>

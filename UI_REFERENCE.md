@@ -63,7 +63,9 @@ A "Select all" checkbox in the list header, sort/filter controls, and one row pe
 - **Status filter** — All statuses, or one specific status (Ready to process, Processing, Completed, Failed).
 - **Type filter** — All types, or one specific extension (PDF, DXF, CSV, TXT, TIFF, LandXML). TIFF and TIF files are grouped together.
 
-Selecting one or more files (via each row's checkbox, or "Select all," which respects the current sort/filter) reveals a batch toolbar: **"Process selected,"** **"Archive selected"** (opens the same style of confirmation dialog as a single delete, listing every selected file by name), and **"Clear selection."** Every batch action reports partial success/failure — a short summary in the status banner (e.g. "1 of 2 file(s) archived, 1 failed.") with a "Show details" link to the full per-file breakdown — rather than succeeding or failing as a single unit.
+Selecting one or more files (via each row's checkbox, or "Select all," which respects the current sort/filter) reveals a batch toolbar: **"Process selected,"** **"Accept selected"** (accepts a revision for each selected file, same as the per-row action — see below for how it handles files that aren't eligible), **"Archive selected"** (opens the same style of confirmation dialog as a single archive, listing every selected file by name), and **"Clear selection."** Every batch action reports partial success/failure — a short summary in the status banner (e.g. "1 of 2 file(s) archived, 1 failed." or, for accept, "3 file(s): 1 accepted, 2 skipped.") with a "Show details" link to the full per-file breakdown, grouped by outcome — rather than succeeding or failing as a single unit.
+
+Unlike the other batch actions, **"Accept selected" runs one file at a time, not all at once.** Accepting assigns the next sequential revision number for the project, and running many accepts concurrently risks two of them computing the same number before either commits (a real bug fixed once already with a database constraint and retry logic on the backend); running them sequentially avoids relying on that retry path under real concurrency in the first place. It also treats two kinds of selected files as **skipped** rather than attempting them: a file that's already had its revision accepted (matching the per-row button already showing "Revision accepted" for it), and a file that isn't in "Processing completed" status yet. Skipped files are never sent to the server at all, and appear in their own "Skipped" group in the details breakdown alongside "Accepted" and "Failed."
 
 Each row shows:
 
@@ -77,7 +79,7 @@ Each row shows:
   - *Failed or stuck processing* → **Retry** button: re-runs extraction (same action as Process, relabeled).
   - *Completed* → **Accept revision** button: turns this file's extracted content into a new site-model revision (see next section). Once accepted, the button becomes disabled and reads "Revision accepted." Only one accept can run at a time across the whole file list — the button is disabled on every row while one is in progress.
   - **Replace** button (hidden once a file has already been replaced): opens an inline "Choose a replacement file" picker plus "Upload replacement" and "Cancel" buttons directly under that file's row. Uploading here links the new file to the original as a newer version of the same document (not a coincidentally-same-named unrelated file) — the original is marked "Replaced by a newer version" and can't be replaced again itself.
-  - **Delete** button: opens a confirmation dialog ("Remove `<name>`?"). Confirming archives the file (moves it to the sidebar's Archived files) — it is not immediately destroyed; accepted revisions and calculations built from it remain.
+  - **Archive** button: opens a confirmation dialog ("Remove `<name>`?"). Confirming archives the file (moves it to the sidebar's Archived files) — it is not immediately destroyed; accepted revisions and calculations built from it remain. (Labeled "Archive," not "Delete," since that's what it actually does — permanent removal is the separate "Purge" action reachable from the Archived files panel.)
 
 All row-level and batch actions are disabled while any batch action is in progress, so a selection can't be acted on twice at once.
 
@@ -116,7 +118,7 @@ A form to run one deterministic geometric calculation at a time, plus a running 
 
 Six modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
 
-- **Archive file** — triggered by a file row's Delete button.
+- **Archive file** — triggered by a file row's Archive button.
 - **Permanent purge (file)** — triggered by the Archived files panel's Purge button.
 - **Archive project** — triggered by the "Archive project" button on the active project.
 - **Permanent purge (project)** — triggered by the Archived projects panel's Purge button.

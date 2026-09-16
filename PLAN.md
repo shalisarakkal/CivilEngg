@@ -307,6 +307,7 @@ Phase 6 lifecycle additions:
 - [x] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
 - [x] Support processing multiple selected/queued files in one action
 - [x] Support archiving (deleting) multiple selected files in one action
+- [x] Support accepting a revision for multiple selected files in one action (not originally scoped here, added afterward for parity with the other per-file actions). Runs sequentially rather than concurrently like the other batch actions, since accepting assigns the next revision number for the project and concurrent accepts already caused a real duplicate-number bug once; a selected file that's already accepted or not yet completed is skipped client-side rather than sent to the server.
 - [x] Support restoring multiple archived files in one action
 - [x] Support permanently purging multiple archived files in one action
 - [x] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list

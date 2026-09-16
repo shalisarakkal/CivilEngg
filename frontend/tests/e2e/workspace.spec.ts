@@ -327,6 +327,109 @@ test.describe("project workspace", () => {
     await expect(page.locator(".batch-details-group", { hasText: "Failed" })).toContainText("survey-2.csv — File is already archived");
   });
 
+  test("batch actions: accepting selected files skips ones that are already accepted or not completed", async ({ page }) => {
+    const files = [
+      {
+        id: "file-1",
+        project_id: PROJECT.id,
+        original_name: "ready.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "a".repeat(64),
+        status: "completed",
+        uploaded_at: "2026-01-01T00:00:00Z",
+        processed_at: "2026-01-01T00:05:00Z",
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-1",
+        superseded_by_id: null,
+      },
+      {
+        id: "file-2",
+        project_id: PROJECT.id,
+        original_name: "still-queued.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "b".repeat(64),
+        status: "queued",
+        uploaded_at: "2026-01-02T00:00:00Z",
+        processed_at: null,
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-2",
+        superseded_by_id: null,
+      },
+      {
+        id: "file-3",
+        project_id: PROJECT.id,
+        original_name: "already-accepted.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "c".repeat(64),
+        status: "completed",
+        uploaded_at: "2026-01-03T00:00:00Z",
+        processed_at: "2026-01-03T00:05:00Z",
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-3",
+        superseded_by_id: null,
+      },
+    ];
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "GET") return json(route, files);
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/processing`, (route) =>
+      json(route, [{ id: "job-3", project_id: PROJECT.id, source_file_id: "file-3", status: "completed", parser_name: "csv", started_at: null, completed_at: null, warnings: null, error_message: null }]),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) =>
+      json(route, [{ id: "rev-3", revision_number: 1, created_at: "2026-01-03T00:06:00Z", source_job_ids: ["job-3"], notes: null }]),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/rev-3/entities*`, (route) => json(route, []));
+
+    let file1AcceptCalls = 0;
+    let file2AcceptCalls = 0;
+    let file3AcceptCalls = 0;
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/from-extraction/file-1`, (route) => {
+      file1AcceptCalls += 1;
+      return json(route, { id: "rev-1", revision_number: 2, created_at: "2026-01-04T00:00:00Z", source_job_ids: ["job-1"], notes: null }, 201);
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/from-extraction/file-2`, (route) => {
+      file2AcceptCalls += 1;
+      return json(route, { detail: "should never be called" }, 500);
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/from-extraction/file-3`, (route) => {
+      file3AcceptCalls += 1;
+      return json(route, { detail: "should never be called" }, 500);
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("ready.csv")).toBeVisible();
+
+    const rows = page.locator(".file-row");
+    await rows.nth(0).locator('input[type="checkbox"]').check();
+    await rows.nth(1).locator('input[type="checkbox"]').check();
+    await rows.nth(2).locator('input[type="checkbox"]').check();
+    await expect(page.getByText("3 selected")).toBeVisible();
+
+    await page.getByRole("button", { name: "Accept selected" }).click();
+
+    await expect(page.getByText("3 file(s): 1 accepted, 2 skipped.")).toBeVisible();
+    await page.getByRole("button", { name: "Show details" }).click();
+    await expect(page.locator(".batch-details-group", { hasText: /^Accepted/ })).toContainText("ready.csv");
+    await expect(page.locator(".batch-details-group", { hasText: /^Skipped/ })).toContainText("still-queued.csv — File is not completed (status: queued)");
+    await expect(page.locator(".batch-details-group", { hasText: /^Skipped/ })).toContainText("already-accepted.csv — Revision already accepted");
+
+    // The two ineligible files must never have been sent to the server at all.
+    expect(file2AcceptCalls).toBe(0);
+    expect(file3AcceptCalls).toBe(0);
+    expect(file1AcceptCalls).toBe(1);
+
+    // The newly-accepted file's own row reflects it, same as a single accept would.
+    await expect(rows.filter({ hasText: "ready.csv" }).getByRole("button", { name: "Revision accepted" })).toBeVisible();
+  });
+
   test("calculation state: running a calculation renders its result", async ({ page }) => {
     await mockBaseline(page, [PROJECT]);
     await page.route(`${API}/projects/${PROJECT.id}/calculations`, async (route) => {
