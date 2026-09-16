@@ -781,22 +781,27 @@ export default function ProjectWorkspace() {
     const targets = files.filter((file) => selectedFileIds.has(file.id));
     setBatchBusy("process");
     setMessage(`Processing ${targets.length} file(s)...`);
-    const results = await Promise.all(
-      targets.map(async (file): Promise<BatchResult> => {
-        try {
-          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
-          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
-          const error = await response.json().catch(() => ({}));
-          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
-        } catch (error) {
-          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
-        }
-      }),
-    );
-    await loadProjectData(selectedProject);
-    setMessage(summarizeBatchResult("processed", results), results.length > 1 ? results : null);
-    setSelectedFileIds(new Set());
-    setBatchBusy(null);
+    try {
+      const results = await Promise.all(
+        targets.map(async (file): Promise<BatchResult> => {
+          try {
+            const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
+            if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+            const error = await response.json().catch(() => ({}));
+            return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+          } catch (error) {
+            return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+          }
+        }),
+      );
+      await loadProjectData(selectedProject);
+      setMessage(summarizeBatchResult("processed", results), results.length > 1 ? results : null);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Batch processing failed: ${error.message}` : "Batch processing failed.");
+    } finally {
+      setSelectedFileIds(new Set());
+      setBatchBusy(null);
+    }
   }
 
   async function confirmBatchDeleteFiles() {
@@ -804,25 +809,30 @@ export default function ProjectWorkspace() {
     const targets = filesPendingBatchDelete;
     setBatchBusy("archive");
     setMessage(`Archiving ${targets.length} file(s)...`);
-    const results = await Promise.all(
-      targets.map(async (file): Promise<BatchResult> => {
-        try {
-          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
-          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
-          const error = await response.json().catch(() => ({}));
-          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
-        } catch (error) {
-          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
-        }
-      }),
-    );
-    const archivedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
-    setFiles((current) => current.filter((file) => !archivedIds.has(file.id)));
-    await loadArchivedFiles();
-    setMessage(summarizeBatchResult("archived", results), results.length > 1 ? results : null);
-    setSelectedFileIds(new Set());
-    setBatchBusy(null);
-    setFilesPendingBatchDelete(null);
+    try {
+      const results = await Promise.all(
+        targets.map(async (file): Promise<BatchResult> => {
+          try {
+            const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
+            if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+            const error = await response.json().catch(() => ({}));
+            return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+          } catch (error) {
+            return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+          }
+        }),
+      );
+      const archivedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+      setFiles((current) => current.filter((file) => !archivedIds.has(file.id)));
+      await loadArchivedFiles();
+      setMessage(summarizeBatchResult("archived", results), results.length > 1 ? results : null);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Batch archive failed: ${error.message}` : "Batch archive failed.");
+    } finally {
+      setSelectedFileIds(new Set());
+      setBatchBusy(null);
+      setFilesPendingBatchDelete(null);
+    }
   }
 
   async function restoreSelectedArchivedFiles() {
@@ -830,24 +840,29 @@ export default function ProjectWorkspace() {
     const targets = archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id));
     setBatchBusy("restore");
     setMessage(`Restoring ${targets.length} file(s)...`);
-    const results = await Promise.all(
-      targets.map(async (file): Promise<BatchResult> => {
-        try {
-          const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
-          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
-          const error = await response.json().catch(() => ({}));
-          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
-        } catch (error) {
-          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
-        }
-      }),
-    );
-    const restoredIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
-    setArchivedFiles((current) => current.filter((file) => !restoredIds.has(file.id)));
-    if (selectedProject) await loadProjectData(selectedProject);
-    setMessage(summarizeBatchResult("restored", results), results.length > 1 ? results : null);
-    setSelectedArchivedFileIds(new Set());
-    setBatchBusy(null);
+    try {
+      const results = await Promise.all(
+        targets.map(async (file): Promise<BatchResult> => {
+          try {
+            const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
+            if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+            const error = await response.json().catch(() => ({}));
+            return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+          } catch (error) {
+            return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+          }
+        }),
+      );
+      const restoredIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+      setArchivedFiles((current) => current.filter((file) => !restoredIds.has(file.id)));
+      if (selectedProject) await loadProjectData(selectedProject);
+      setMessage(summarizeBatchResult("restored", results), results.length > 1 ? results : null);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Batch restore failed: ${error.message}` : "Batch restore failed.");
+    } finally {
+      setSelectedArchivedFileIds(new Set());
+      setBatchBusy(null);
+    }
   }
 
   async function confirmBatchPurgeArchivedFiles() {
@@ -855,24 +870,29 @@ export default function ProjectWorkspace() {
     const targets = archivedFilesPendingBatchPurge;
     setBatchBusy("purge");
     setMessage(`Permanently deleting ${targets.length} file(s)...`);
-    const results = await Promise.all(
-      targets.map(async (file): Promise<BatchResult> => {
-        try {
-          const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
-          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
-          const error = await response.json().catch(() => ({}));
-          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
-        } catch (error) {
-          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
-        }
-      }),
-    );
-    const purgedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
-    setArchivedFiles((current) => current.filter((file) => !purgedIds.has(file.id)));
-    setMessage(summarizeBatchResult("permanently deleted", results), results.length > 1 ? results : null);
-    setSelectedArchivedFileIds(new Set());
-    setBatchBusy(null);
-    setArchivedFilesPendingBatchPurge(null);
+    try {
+      const results = await Promise.all(
+        targets.map(async (file): Promise<BatchResult> => {
+          try {
+            const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
+            if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+            const error = await response.json().catch(() => ({}));
+            return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+          } catch (error) {
+            return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+          }
+        }),
+      );
+      const purgedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+      setArchivedFiles((current) => current.filter((file) => !purgedIds.has(file.id)));
+      setMessage(summarizeBatchResult("permanently deleted", results), results.length > 1 ? results : null);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Batch purge failed: ${error.message}` : "Batch purge failed.");
+    } finally {
+      setSelectedArchivedFileIds(new Set());
+      setBatchBusy(null);
+      setArchivedFilesPendingBatchPurge(null);
+    }
   }
 
   async function acceptRevision(file: SourceFile) {
@@ -952,6 +972,8 @@ export default function ProjectWorkspace() {
         await loadEntities(selectedProject.id, firstAcceptedRevisionId);
       }
       setMessage(summarizeBatchResult("accepted", results), results.length > 1 ? results : null, "Accepted");
+    } catch (error) {
+      setMessage(error instanceof Error ? `Batch accept failed: ${error.message}` : "Batch accept failed.");
     } finally {
       setSelectedFileIds(new Set());
       setBatchBusy(null);

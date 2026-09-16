@@ -327,6 +327,56 @@ test.describe("project workspace", () => {
     await expect(page.locator(".batch-details-group", { hasText: "Failed" })).toContainText("survey-2.csv — File is already archived");
   });
 
+  test("batch actions: an unexpected error refreshing after a batch still re-enables the toolbar", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    let getFilesCalls = 0;
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      getFilesCalls += 1;
+      if (getFilesCalls === 1) {
+        return json(route, [
+          {
+            id: "file-1",
+            project_id: PROJECT.id,
+            original_name: "survey.csv",
+            media_type: "text/csv",
+            size_bytes: 20,
+            checksum: "a".repeat(64),
+            status: "queued",
+            uploaded_at: "2026-01-01T00:00:00Z",
+            processed_at: null,
+            error_message: null,
+            deleted_at: null,
+            document_group_id: "file-1",
+            superseded_by_id: null,
+          },
+        ]);
+      }
+      // Simulate an unexpected failure refreshing project data after the
+      // batch's own requests complete -- a 200 with a body that isn't
+      // actually valid JSON, so loadProjectData throws parsing it.
+      return route.fulfill({ status: 200, contentType: "application/json", body: "not valid json" });
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/files/file-1/process`, (route) => json(route, { id: "job-1", status: "processing" }, 201));
+
+    await page.goto("/");
+    await expect(page.getByText("survey.csv")).toBeVisible();
+
+    await page.locator(".file-row").locator('input[type="checkbox"]').check();
+    await page.getByRole("button", { name: "Process selected" }).click();
+
+    await expect(page.getByText("Batch processing failed:")).toBeVisible();
+    // The selection (and with it the toolbar) is cleared by the same
+    // finally block that resets batchBusy -- if that guard were missing,
+    // the toolbar would still be showing here, permanently disabled.
+    await expect(page.getByRole("button", { name: "Process selected" })).toHaveCount(0);
+
+    // Re-selecting proves batchBusy itself was actually reset, not just the
+    // selection: the button comes back enabled, not stuck mid-batch.
+    await page.locator(".file-row").locator('input[type="checkbox"]').check();
+    await expect(page.getByRole("button", { name: "Process selected" })).toBeEnabled();
+  });
+
   test("batch actions: accepting selected files skips ones that are already accepted or not completed", async ({ page }) => {
     const files = [
       {
