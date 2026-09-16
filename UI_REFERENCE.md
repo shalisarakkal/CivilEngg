@@ -40,7 +40,7 @@ The same pattern as Admin archive, one level up: a running count ("N archived pr
 
 Nothing in this panel renders until a project is selected; before that, it shows "Create your first project."
 
-At the top, next to the project name, an **"Archive project"** button opens a confirmation dialog ("Archive `<name>`?"). Confirming hides the project from the sidebar's Project list and moves it to "Archived projects"; its files, revisions, calculations, summaries, and questions all remain untouched and come back exactly as they were if the project is later restored.
+At the top, next to the project name, an **"Archive project"** button opens a confirmation dialog ("Archive `<name>`?"). Confirming hides the project from the sidebar's Project list and moves it to "Archived projects"; its files, revisions, calculations, summaries, and questions all become inaccessible along with it — none of it is deleted, but none of it is reachable either until the project is restored, at which point everything comes back exactly as it was.
 
 ### Source files (upload)
 
