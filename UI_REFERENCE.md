@@ -6,7 +6,8 @@ There is currently one screen. Everything below lives on it.
 
 ## Header
 
-- **"Project workspace" title and "Phase 6 active" badge** — static labels; the badge is a leftover marker from development phases and isn't interactive.
+- **"Project workspace" title** — a static label.
+- **API status badge** — a live indicator, checked once when the page loads: "API connected · `<environment>`" (the backend's actual `APP_ENV` value) in blue if `GET /health` succeeds, or "API unreachable" in red if it fails or the backend can't be reached at all.
 - **Status message banner** — a single line just under the header, pinned to the top of the screen (stays visible while you scroll). Every action in the app — creating a project, uploading a file, running a calculation, asking a question — updates this one line with what just happened or what went wrong. It only ever shows the single most recent action; it is not a log.
 
 ## Left Sidebar — Projects

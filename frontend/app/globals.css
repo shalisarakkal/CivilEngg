@@ -25,6 +25,7 @@ body {
 h1, h2, h3, p { margin-top: 0; }
 h1 { font-size: clamp(28px, 4vw, 48px); font-weight: 400; letter-spacing: 0; margin-bottom: 0; }
 .status, .card-state { background: #e5f3f7; color: #17687e; font-family: Arial, sans-serif; font-size: 12px; padding: 8px 10px; }
+.status.status-error { background: #fbeae8; color: #9c342d; }
 .intro { align-items: end; display: grid; gap: 48px; grid-template-columns: 1.5fr 1fr; padding: 88px 0 72px; }
 h2 { font-size: clamp(42px, 7vw, 88px); font-weight: 400; letter-spacing: -0.03em; line-height: 0.95; margin-bottom: 24px; max-width: 720px; }
 .lede { color: var(--muted); font-family: Arial, sans-serif; font-size: 17px; line-height: 1.6; max-width: 540px; }

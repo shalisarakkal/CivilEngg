@@ -124,6 +124,7 @@ export default function ProjectWorkspace() {
   const [processingJobs, setProcessingJobs] = useState<ProcessingJob[]>([]);
   const [archivedFiles, setArchivedFiles] = useState<SourceFile[]>([]);
   const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  const [apiStatus, setApiStatus] = useState<{ ok: boolean; environment?: string } | null>(null);
   const [projectPendingArchive, setProjectPendingArchive] = useState<Project | null>(null);
   const [projectPendingPurge, setProjectPendingPurge] = useState<Project | null>(null);
   const [revisions, setRevisions] = useState<Revision[]>([]);
@@ -750,8 +751,22 @@ export default function ProjectWorkspace() {
       }
     }
 
+    async function loadApiStatus() {
+      try {
+        const response = await fetch(`${apiUrl}/health`);
+        if (!response.ok) {
+          setApiStatus({ ok: false });
+          return;
+        }
+        const health: { status: string; environment: string } = await response.json();
+        setApiStatus({ ok: health.status === "ok", environment: health.environment });
+      } catch {
+        setApiStatus({ ok: false });
+      }
+    }
+
     async function loadInitialData() {
-      await loadInitialProjects();
+      await Promise.all([loadInitialProjects(), loadApiStatus()]);
       const archiveResponse = await fetch(`${apiUrl}/admin/files/archived`);
       if (archiveResponse.ok) setArchivedFiles(await archiveResponse.json());
       const archivedProjectsResponse = await fetch(`${apiUrl}/admin/projects/archived`);
@@ -765,7 +780,7 @@ export default function ProjectWorkspace() {
     <main className="workspace">
       <header className="topbar">
         <div><p className="eyebrow">Civil engineering intelligence</p><h1>Project workspace</h1></div>
-        <span className="status">Phase 6 active</span>
+        <span className={`status ${apiStatus && !apiStatus.ok ? "status-error" : ""}`}>{apiStatus === null ? "Checking API..." : apiStatus.ok ? `API connected · ${apiStatus.environment}` : "API unreachable"}</span>
       </header>
       <p className="message" role="status">{message}</p>
       <section className="workspace-grid">
