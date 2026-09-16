@@ -301,6 +301,7 @@ Phase 6 lifecycle additions:
 - [x] Add a project permanent-purge endpoint: delete the project row (cascading to its files, jobs, revisions, entities, calculations, summaries, and Q&A history via existing `ondelete="CASCADE"` foreign keys) and delete its local storage subdirectory
 - [x] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
 - [x] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
+- [ ] Fix the empty-workspace state showing "Create your first project" even when projects exist (found via the new archive action: archiving the currently-active project always clears the selection to null, even when other projects remain). Show "Select your project" instead when one or more projects exist but none is selected, and auto-select the remaining project when exactly one is left after an action like archiving.
 - [ ] Support selecting multiple files in a project's file list (checkboxes or a "select all")
 - [ ] Support uploading multiple files in one action instead of one at a time
 - [ ] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload

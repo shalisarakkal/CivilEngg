@@ -71,6 +71,6 @@ All notable project changes will be recorded here. Entries should describe user-
 
 ### Planned
 
-- Phase 10 (remaining): multi-file operations within a project (multi-select upload, process, delete, restore, and purge), drag-and-drop upload, and file-list sort/filter. Project-level archive/restore/permanent-purge lifecycle is done (see Added above). See PLAN.md's Phase 10 section for the full work-item list.
+- Phase 10 (remaining): fix the empty-workspace state showing "Create your first project" even when projects exist but none is selected (found via the archive-project action); multi-file operations within a project (multi-select upload, process, delete, restore, and purge); drag-and-drop upload; and file-list sort/filter. Project-level archive/restore/permanent-purge lifecycle is done (see Added above). See PLAN.md's Phase 10 section for the full work-item list.
 - Phase 11: show generated site summaries as a history list (like the existing Q&A list) instead of only the single most recent one, since a summary is already saved to the database on every request but the UI currently discards the previous one from view. See PLAN.md's Phase 11 section.
 - Phase Z: freeze MVP scope, document deployment/backup/restore procedures, configure environment secrets, run a final smoke test, and publish a short user guide before release. See PLAN.md's Phase Z section for the full work-item list.
