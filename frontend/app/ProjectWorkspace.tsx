@@ -1,9 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useState } from "react";
 
 type Project = { id: string; name: string; description: string | null; default_unit_system: string };
-type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null; document_group_id: string; superseded_by_id: string | null };
+type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null; document_group_id: string; superseded_by_id: string | null; uploaded_at: string };
 type ProcessingJob = { id: string; source_file_id: string; status: string; warnings: string[] | null };
 type Revision = { id: string; revision_number: number; created_at: string; source_job_ids: string[] | null; notes: string | null };
 type Entity = { id: string; entity_type: string; geometry: Record<string, unknown> | null; properties: Record<string, unknown> | null; validation_status: string; source_reference: Record<string, unknown> | null };
@@ -60,6 +60,33 @@ function summarizeWarnings(warnings: string[]): string[] {
   if (unique.length <= MAX_DISPLAYED_WARNINGS) return unique;
   const shown = unique.slice(0, MAX_DISPLAYED_WARNINGS);
   return [...shown, `+${unique.length - MAX_DISPLAYED_WARNINGS} more warning(s)`];
+}
+
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "dxf", "csv", "txt", "tif", "tiff", "xml"]);
+
+function fileExtension(name: string): string {
+  const parts = name.split(".");
+  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+}
+
+function fileTypeGroup(name: string): string {
+  const extension = fileExtension(name);
+  return extension === "tiff" ? "tif" : extension;
+}
+
+type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean };
+
+function summarizeBatchResult(verb: string, results: BatchResult[]): string {
+  const succeeded = results.filter((result) => result.ok);
+  const failed = results.filter((result) => !result.ok);
+  if (results.length === 1) {
+    const [only] = results;
+    return only.ok ? `${only.name} ${verb}.` : `${only.name} could not be ${verb}: ${only.detail}`;
+  }
+  if (failed.length === 0) return `${succeeded.length} file(s) ${verb}.`;
+  const failureList = failed.map((result) => `${result.name} (${result.detail})`).join(", ");
+  if (succeeded.length === 0) return `${verb[0].toUpperCase()}${verb.slice(1)} failed for all ${failed.length} file(s): ${failureList}`;
+  return `${succeeded.length} of ${results.length} file(s) ${verb}. Failed: ${failureList}`;
 }
 
 function formatCalculationInputs(inputs: Record<string, unknown>): string {
@@ -134,7 +161,16 @@ export default function ProjectWorkspace() {
   const [questionText, setQuestionText] = useState("");
   const [questionHistory, setQuestionHistory] = useState<QuestionAnswerRecord[]>([]);
   const [projectName, setProjectName] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+  const [selectedArchivedFileIds, setSelectedArchivedFileIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState<string | null>(null);
+  const [filesPendingBatchDelete, setFilesPendingBatchDelete] = useState<SourceFile[] | null>(null);
+  const [archivedFilesPendingBatchPurge, setArchivedFilesPendingBatchPurge] = useState<SourceFile[] | null>(null);
+  const [fileSort, setFileSort] = useState<"date" | "name" | "status">("date");
+  const [fileStatusFilter, setFileStatusFilter] = useState("all");
+  const [fileTypeFilter, setFileTypeFilter] = useState("all");
   const [calculationType, setCalculationType] = useState<CalculationType>("slope");
   const [perimeterGeometryType, setPerimeterGeometryType] = useState<PerimeterGeometryType>("LineString");
   const [coordinateUnit, setCoordinateUnit] = useState("ft");
@@ -165,6 +201,14 @@ export default function ProjectWorkspace() {
   const entityPageCount = Math.max(1, Math.ceil(entities.length / entityPageSize));
   const entityPageStart = entityPage * entityPageSize;
   const visibleEntities = entities.slice(entityPageStart, entityPageStart + entityPageSize);
+  const visibleFiles = files
+    .filter((file) => fileStatusFilter === "all" || file.status === fileStatusFilter)
+    .filter((file) => fileTypeFilter === "all" || fileTypeGroup(file.original_name) === fileTypeFilter)
+    .sort((a, b) => {
+      if (fileSort === "name") return a.original_name.localeCompare(b.original_name);
+      if (fileSort === "status") return a.status.localeCompare(b.status);
+      return new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime();
+    });
 
   function revisionSourceFile(revision: Revision) {
     const sourceJobId = revision.source_job_ids?.[0];
@@ -312,6 +356,7 @@ export default function ProjectWorkspace() {
     setEntities([]);
     setSummary(null);
     setQuestionHistory([]);
+    setSelectedFileIds(new Set());
     await loadProjectData(project);
   }
 
@@ -417,40 +462,60 @@ export default function ProjectWorkspace() {
     }
   }
 
-  async function uploadFile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedProject || !selectedFile) return;
-    const fileName = selectedFile.name;
+  async function uploadFiles(filesToUpload: File[]) {
+    if (!selectedProject || filesToUpload.length === 0) return;
     setLoading(true);
+    const results: BatchResult[] = [];
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
-      if (response.ok) {
-        setSelectedFile(null);
-        setMessage(`${fileName} uploaded and queued for processing.`);
-        await loadProjectData(selectedProject);
-        const input = document.getElementById("source-file") as HTMLInputElement | null;
-        if (input) input.value = "";
-      } else {
-        const error = await response.json().catch(() => ({}));
-        setMessage(error.detail ?? `${fileName} could not be uploaded.`);
-        if (response.status === 409) {
-          // Duplicate content: retrying with the same file would only fail the same way again.
-          setSelectedFile(null);
-          const input = document.getElementById("source-file") as HTMLInputElement | null;
-          if (input) input.value = "";
+      for (const file of filesToUpload) {
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
+          if (response.ok) {
+            results.push({ name: file.name, ok: true, detail: "" });
+          } else {
+            const error = await response.json().catch(() => ({}));
+            // A duplicate-content rejection (409) would only fail the same way again on retry.
+            results.push({ name: file.name, ok: false, detail: error.detail ?? `HTTP ${response.status}`, retryable: response.status !== 409 });
+          }
+        } catch (error) {
+          results.push({ name: file.name, ok: false, detail: error instanceof Error ? error.message : "request failed", retryable: true });
         }
       }
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? `${fileName} upload request failed: ${error.message}`
-          : `${fileName} upload request failed.`
-      );
+      await loadProjectData(selectedProject);
+      setMessage(summarizeBatchResult("uploaded and queued for processing", results));
     } finally {
       setLoading(false);
+      setPendingFiles(filesToUpload.filter((_, index) => results[index] && !results[index].ok && results[index].retryable !== false));
+      const input = document.getElementById("source-file") as HTMLInputElement | null;
+      if (input) input.value = "";
     }
+  }
+
+  function handleUploadDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!selectedProject) return;
+    event.preventDefault();
+    if (event.dataTransfer.types.includes("Files")) setIsDraggingFiles(true);
+  }
+
+  function handleUploadDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDraggingFiles(false);
+  }
+
+  function handleUploadDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDraggingFiles(false);
+    if (!selectedProject) return;
+    const dropped = Array.from(event.dataTransfer.files ?? []);
+    if (dropped.length === 0) return;
+    const accepted = dropped.filter((file) => ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
+    const rejected = dropped.filter((file) => !ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
+    if (rejected.length > 0) {
+      setMessage(`${rejected.length} file(s) rejected (unsupported type): ${rejected.map((file) => file.name).join(", ")}.`);
+    }
+    if (accepted.length > 0) void uploadFiles(accepted);
   }
 
   async function replaceFile(file: SourceFile) {
@@ -525,6 +590,7 @@ export default function ProjectWorkspace() {
         return;
       }
       setFiles((current) => current.filter((item) => item.id !== file.id));
+      setSelectedFileIds((current) => { if (!current.has(file.id)) return current; const next = new Set(current); next.delete(file.id); return next; });
       setMessage(`${file.original_name} was archived.`);
       await loadArchivedFiles();
     } catch (error) {
@@ -547,6 +613,7 @@ export default function ProjectWorkspace() {
         return;
       }
       setArchivedFiles((current) => current.filter((item) => item.id !== file.id));
+      setSelectedArchivedFileIds((current) => { if (!current.has(file.id)) return current; const next = new Set(current); next.delete(file.id); return next; });
       setMessage(`${file.original_name} was restored.`);
       if (selectedProject) await loadProjectData(selectedProject);
     } catch (error) {
@@ -574,6 +641,7 @@ export default function ProjectWorkspace() {
         return;
       }
       setArchivedFiles((current) => current.filter((item) => item.id !== file.id));
+      setSelectedArchivedFileIds((current) => { if (!current.has(file.id)) return current; const next = new Set(current); next.delete(file.id); return next; });
       setMessage(`${file.original_name} was permanently deleted.`);
     } catch (error) {
       setMessage(error instanceof Error ? `Purge request failed: ${error.message}` : "Purge request failed.");
@@ -581,6 +649,140 @@ export default function ProjectWorkspace() {
       setBusyAction(null);
       setFilePendingPurge(null);
     }
+  }
+
+  function toggleFileSelection(fileId: string) {
+    setSelectedFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+  }
+
+  function toggleArchivedFileSelection(fileId: string) {
+    setSelectedArchivedFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFiles(visible: SourceFile[]) {
+    setSelectedFileIds((current) => {
+      const allSelected = visible.length > 0 && visible.every((file) => current.has(file.id));
+      if (allSelected) return new Set([...current].filter((id) => !visible.some((file) => file.id === id)));
+      const next = new Set(current);
+      visible.forEach((file) => next.add(file.id));
+      return next;
+    });
+  }
+
+  function toggleSelectAllArchivedFiles() {
+    setSelectedArchivedFileIds((current) => {
+      const allSelected = archivedFiles.length > 0 && archivedFiles.every((file) => current.has(file.id));
+      return allSelected ? new Set() : new Set(archivedFiles.map((file) => file.id));
+    });
+  }
+
+  async function processSelectedFiles() {
+    if (!selectedProject || selectedFileIds.size === 0 || batchBusy !== null) return;
+    const targets = files.filter((file) => selectedFileIds.has(file.id));
+    setBatchBusy("process");
+    setMessage(`Processing ${targets.length} file(s)...`);
+    const results = await Promise.all(
+      targets.map(async (file): Promise<BatchResult> => {
+        try {
+          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
+          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+          const error = await response.json().catch(() => ({}));
+          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+        } catch (error) {
+          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+        }
+      }),
+    );
+    await loadProjectData(selectedProject);
+    setMessage(summarizeBatchResult("processed", results));
+    setSelectedFileIds(new Set());
+    setBatchBusy(null);
+  }
+
+  async function confirmBatchDeleteFiles() {
+    if (!selectedProject || !filesPendingBatchDelete || batchBusy !== null) return;
+    const targets = filesPendingBatchDelete;
+    setBatchBusy("archive");
+    setMessage(`Archiving ${targets.length} file(s)...`);
+    const results = await Promise.all(
+      targets.map(async (file): Promise<BatchResult> => {
+        try {
+          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
+          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+          const error = await response.json().catch(() => ({}));
+          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+        } catch (error) {
+          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+        }
+      }),
+    );
+    const archivedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+    setFiles((current) => current.filter((file) => !archivedIds.has(file.id)));
+    await loadArchivedFiles();
+    setMessage(summarizeBatchResult("archived", results));
+    setSelectedFileIds(new Set());
+    setBatchBusy(null);
+    setFilesPendingBatchDelete(null);
+  }
+
+  async function restoreSelectedArchivedFiles() {
+    if (selectedArchivedFileIds.size === 0 || batchBusy !== null) return;
+    const targets = archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id));
+    setBatchBusy("restore");
+    setMessage(`Restoring ${targets.length} file(s)...`);
+    const results = await Promise.all(
+      targets.map(async (file): Promise<BatchResult> => {
+        try {
+          const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
+          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+          const error = await response.json().catch(() => ({}));
+          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+        } catch (error) {
+          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+        }
+      }),
+    );
+    const restoredIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+    setArchivedFiles((current) => current.filter((file) => !restoredIds.has(file.id)));
+    if (selectedProject) await loadProjectData(selectedProject);
+    setMessage(summarizeBatchResult("restored", results));
+    setSelectedArchivedFileIds(new Set());
+    setBatchBusy(null);
+  }
+
+  async function confirmBatchPurgeArchivedFiles() {
+    if (!archivedFilesPendingBatchPurge || batchBusy !== null) return;
+    const targets = archivedFilesPendingBatchPurge;
+    setBatchBusy("purge");
+    setMessage(`Permanently deleting ${targets.length} file(s)...`);
+    const results = await Promise.all(
+      targets.map(async (file): Promise<BatchResult> => {
+        try {
+          const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
+          if (response.ok) return { name: file.original_name, ok: true, detail: "" };
+          const error = await response.json().catch(() => ({}));
+          return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
+        } catch (error) {
+          return { name: file.original_name, ok: false, detail: error instanceof Error ? error.message : "request failed" };
+        }
+      }),
+    );
+    const purgedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
+    setArchivedFiles((current) => current.filter((file) => !purgedIds.has(file.id)));
+    setMessage(summarizeBatchResult("permanently deleted", results));
+    setSelectedArchivedFileIds(new Set());
+    setBatchBusy(null);
+    setArchivedFilesPendingBatchPurge(null);
   }
 
   async function acceptRevision(file: SourceFile) {
@@ -794,24 +996,42 @@ export default function ProjectWorkspace() {
             {projects.length === 0 && <p className="muted">No projects yet.</p>}
             {projects.map((project) => <button className={`project-item ${selectedProject?.id === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectProject(project)}><span>{project.name}</span><small>{project.default_unit_system}</small></button>)}
           </div>
-          <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.map((file) => <div className="archive-row" key={file.id}><strong>{file.original_name}</strong><div><button disabled={busyAction === `restore:${file.id}`} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}`} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
+          <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.length > 0 && <div className="archive-controls"><label className="select-all"><input type="checkbox" checked={archivedFiles.length > 0 && archivedFiles.every((file) => selectedArchivedFileIds.has(file.id))} onChange={toggleSelectAllArchivedFiles} disabled={batchBusy !== null} /><span>Select all</span></label>{selectedArchivedFileIds.size > 0 && <div className="batch-toolbar-mini"><button disabled={batchBusy !== null} onClick={() => void restoreSelectedArchivedFiles()}>{batchBusy === "restore" ? "Restoring..." : `Restore (${selectedArchivedFileIds.size})`}</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id)))}>{`Purge (${selectedArchivedFileIds.size})`}</button></div>}</div>}{archivedFiles.map((file) => <div className="archive-row" key={file.id}><div className="archive-row-top"><input type="checkbox" checked={selectedArchivedFileIds.has(file.id)} onChange={() => toggleArchivedFileSelection(file.id)} disabled={batchBusy !== null} /><strong>{file.original_name}</strong></div><div><button disabled={busyAction === `restore:${file.id}` || batchBusy !== null} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}` || batchBusy !== null} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
           <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button></div>
-            <div className="upload-panel"><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB.</p></div><form className="upload-form" onSubmit={uploadFile}><label className="file-picker" htmlFor="source-file"><span>{selectedFile?.name ?? "Choose a source file"}</span><input id="source-file" type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label><button type="submit" disabled={loading || selectedFile === null}>Upload file</button></form></div>
-            <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>; })}</div>
+            <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setPendingFiles(Array.from(event.target.files ?? []))} /></label><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button></form></div>
+            <div className="file-list">
+              <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
+              {files.length > 0 && <div className="file-list-controls">
+                <label>Sort<select value={fileSort} onChange={(event) => setFileSort(event.target.value as "date" | "name" | "status")}><option value="date">Upload date</option><option value="name">Name</option><option value="status">Status</option></select></label>
+                <label>Status<select value={fileStatusFilter} onChange={(event) => setFileStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="queued">Ready to process</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="failed">Failed</option></select></label>
+                <label>Type<select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)}><option value="all">All types</option><option value="pdf">PDF</option><option value="dxf">DXF</option><option value="csv">CSV</option><option value="txt">TXT</option><option value="tif">TIFF</option><option value="xml">LandXML</option></select></label>
+              </div>}
+              {selectedFileIds.size > 0 && <div className="batch-toolbar">
+                <span>{selectedFileIds.size} selected</span>
+                <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => void processSelectedFiles()}>{batchBusy === "process" ? "Processing..." : "Process selected"}</button>
+                <button type="button" className="danger-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(files.filter((file) => selectedFileIds.has(file.id)))}>Archive selected</button>
+                <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => setSelectedFileIds(new Set())}>Clear selection</button>
+              </div>}
+              {files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}
+              {files.length > 0 && visibleFiles.length === 0 && <p className="muted">No files match the current filter.</p>}
+              {visibleFiles.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><label className="file-select"><input type="checkbox" checked={selectedFileIds.has(file.id)} onChange={() => toggleFileSelection(file.id)} disabled={batchBusy !== null} /></label><div className="file-info"><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null || batchBusy !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" disabled={batchBusy !== null} onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}` || batchBusy !== null} onClick={() => void deleteFile(file)}>Delete</button></div></div>; })}
+            </div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}<span className="result-inputs">{formatCalculationInputs(calculation.inputs)}</span></small></button>)}</div>}</section>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site intelligence</p><h3>Summarize and ask questions.</h3><p className="calculation-help">Answers are grounded in the accepted site model and calculations. AI-generated content is clearly labeled and never invents a measurement.</p></div><button type="button" className="secondary-button" disabled={loading || revisions.length === 0} onClick={() => void requestSummary()}>Request site summary</button></div>{revisions.length > 0 && <div className="qa-scope"><p className="eyebrow">Scope</p><p className="muted">{qaRevisionIds.length === 0 ? "Whole project (every accepted document's latest revision)." : "Selected revisions only."}</p><div className="qa-scope-options">{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <label key={revision.id} className="qa-scope-option"><input type="checkbox" checked={qaRevisionIds.includes(revision.id)} onChange={() => toggleQaRevision(revision.id)} /><span>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"}</span></label>; })}</div></div>}{summary && <div className="summary-card"><p>{summary.content.summary}</p><dl><div><dt>Grading</dt><dd>{summary.content.grading}</dd></div><div><dt>Drainage</dt><dd>{summary.content.drainage}</dd></div><div><dt>Utilities</dt><dd>{summary.content.utilities}</dd></div></dl>{summary.content.attention_flags.length > 0 && <div className="attention-flags"><strong>Attention</strong><ul>{summary.content.attention_flags.map((flag, index) => <li key={index}>{flag}</li>)}</ul></div>}<p className="ai-label">AI-generated · scope: {qaScopeLabel(summary.revision_ids)} · {summary.content.limitations.join(" ")}</p></div>}<form className="question-form" onSubmit={askQuestion}><label>Ask a question<input value={questionText} onChange={(event) => setQuestionText(event.target.value)} placeholder="What is the setback distance?" maxLength={2000} /></label><button type="submit" className="secondary-button" disabled={loading || !questionText.trim()}>Ask</button></form>{questionHistory.length > 0 && <div className="qa-list">{questionHistory.map((record) => <div className="qa-card" key={record.id}><p className="qa-question">{record.question}</p><p className="qa-answer">{record.answer.answer}</p><small className="ai-label">AI-generated · {record.answer.method} · confidence {record.answer.confidence.toFixed(2)} · scope: {qaScopeLabel(record.revision_ids)}</small>{record.answer.limitations && record.answer.limitations.length > 0 && <small className="qa-limitations">{record.answer.limitations.join(" ")}</small>}</div>)}</div>}</section>
             {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
             {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
+            {filesPendingBatchDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-delete-title"><p className="eyebrow">Archive files</p><h3 id="batch-delete-title">Archive {filesPendingBatchDelete.length} file{filesPendingBatchDelete.length === 1 ? "" : "s"}?</h3><p className="muted">{filesPendingBatchDelete.map((file) => file.original_name).join(", ")}</p><p className="muted">Each file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchDeleteFiles()}>{batchBusy === "archive" ? "Archiving..." : "Archive files"}</button></div></section></div>}
           </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
         </section>
       </section>
       {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive, along with everything in it — its files, revisions, calculations, summaries, and questions become inaccessible until you restore it. Nothing is deleted; restoring brings it all back exactly as it was.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}
       {projectPendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="project-purge-title">Permanently delete {projectPendingPurge.name}?</h3><p className="muted">This removes the project, all its files, revisions, calculations, summaries, and questions, and its on-disk storage — permanently. This cannot be undone.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => setProjectPendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => void confirmPurgeArchivedProject()}>{busyAction === `project-purge:${projectPendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
+      {archivedFilesPendingBatchPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="batch-purge-title">Permanently delete {archivedFilesPendingBatchPurge.length} file{archivedFilesPendingBatchPurge.length === 1 ? "" : "s"}?</h3><p className="muted">{archivedFilesPendingBatchPurge.map((file) => file.original_name).join(", ")}</p><p className="muted">This removes each archived file and its metadata. Accepted revisions and calculations remain, but the original sources cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchPurgeArchivedFiles()}>{batchBusy === "purge" ? "Purging..." : "Permanently delete"}</button></div></section></div>}
     </main>
   );
 }
