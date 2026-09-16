@@ -337,6 +337,18 @@ Phase 6 lifecycle additions:
 - [ ] Generating a new summary does not hide a previously generated one from the UI
 - [ ] Each summary in the list clearly shows which revisions it covered and when it was generated
 
+### Phase 12 - Activity Events (not yet scoped)
+
+**Objective:** Found via a real report: processing 26 files, then running a calculation before checking back, silently lost the processing outcome. The status banner is a single line covering the single most recent action across the whole app, and a multi-file batch doesn't block the rest of the page while it runs — so whichever action's status update lands last simply overwrites the banner with no way to recover what was there before. A narrower fix (a small panel preserving just the last few multi-file batch outcomes) was built and verified, then deliberately rolled back in favor of this: a proper activity-events system recording every notable action app-wide (not just multi-file batches), not only the ones that happen to involve more than one file.
+
+**Work items (not yet broken down):**
+
+- [ ] Decide what counts as a loggable "activity event" app-wide (every action currently passed to the status banner, or a curated subset) and its retention (session-only vs. persisted, how many/how long)
+- [ ] Decide the UI: a persistent panel/log, a toast/notification stack, or something else
+- [ ] Design and implement the event model and storage
+- [ ] Implement the chosen UI, replacing or complementing the existing single-line status banner
+- [ ] Add test coverage
+
 ### Phase Z - MVP Release and Deployment
 
 **Objective:** Deliver a usable, repeatable MVP with a documented operational path.
