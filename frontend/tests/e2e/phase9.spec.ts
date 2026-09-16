@@ -30,7 +30,7 @@ test("key phrases extracted from narrative text are shown on their entity cards"
     ),
   });
   await page.getByRole("button", { name: "Upload file" }).click();
-  await expect(page.getByText("notes.txt")).toBeVisible();
+  await expect(page.getByText("notes.txt", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Process", exact: true }).click();
   await expect(page.getByText("Processing completed")).toBeVisible();
@@ -59,7 +59,7 @@ test("semantic type badges and a plan-sheet snippet are shown for a classified D
     buffer: dxfFixture,
   });
   await page.getByRole("button", { name: "Upload file" }).click();
-  await expect(page.getByText("phase9-sample.dxf")).toBeVisible();
+  await expect(page.getByText("phase9-sample.dxf", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Process", exact: true }).click();
   await expect(page.getByText("Processing completed")).toBeVisible();

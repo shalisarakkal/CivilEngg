@@ -87,9 +87,138 @@ test.describe("project workspace", () => {
     });
     await page.getByRole("button", { name: "Upload file" }).click();
 
-    await expect(page.getByText("File uploaded and queued for processing.")).toBeVisible();
-    await expect(page.getByText("survey.csv")).toBeVisible();
-    await expect(page.getByText("Ready to process")).toBeVisible();
+    await expect(page.getByText("survey.csv uploaded and queued for processing.")).toBeVisible();
+    await expect(page.getByText("survey.csv", { exact: true })).toBeVisible();
+    await expect(page.locator(".file-status").getByText("Ready to process")).toBeVisible();
+  });
+
+  test("upload state: selecting multiple files uploads all of them and reports the count", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    const uploaded: string[] = [];
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "POST") {
+        uploaded.push("x");
+        return json(
+          route,
+          {
+            id: `file-${uploaded.length}`,
+            project_id: PROJECT.id,
+            original_name: `survey-${uploaded.length}.csv`,
+            media_type: "text/csv",
+            size_bytes: 20,
+            checksum: `${"a".repeat(63)}${uploaded.length}`,
+            status: "queued",
+            uploaded_at: "2026-01-01T00:00:00Z",
+            processed_at: null,
+            error_message: null,
+            deleted_at: null,
+            document_group_id: `file-${uploaded.length}`,
+            superseded_by_id: null,
+          },
+          201,
+        );
+      }
+      return json(
+        route,
+        uploaded.map((_, index) => ({
+          id: `file-${index + 1}`,
+          project_id: PROJECT.id,
+          original_name: `survey-${index + 1}.csv`,
+          media_type: "text/csv",
+          size_bytes: 20,
+          checksum: `${"a".repeat(63)}${index + 1}`,
+          status: "queued",
+          uploaded_at: "2026-01-01T00:00:00Z",
+          processed_at: null,
+          error_message: null,
+          deleted_at: null,
+          document_group_id: `file-${index + 1}`,
+          superseded_by_id: null,
+        })),
+      );
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.locator('input[type="file"]').setInputFiles([
+      { name: "survey-1.csv", mimeType: "text/csv", buffer: Buffer.from("x,y\n0,0\n") },
+      { name: "survey-2.csv", mimeType: "text/csv", buffer: Buffer.from("x,y\n1,1\n") },
+    ]);
+    await page.getByRole("button", { name: "Upload files" }).click();
+
+    await expect(page.getByText("2 file(s) uploaded and queued for processing.")).toBeVisible();
+    await expect(page.getByText("survey-1.csv")).toBeVisible();
+    await expect(page.getByText("survey-2.csv")).toBeVisible();
+  });
+
+  test("batch actions: selecting files in the list shows a batch toolbar that archives them together", async ({ page }) => {
+    const filesById: Record<string, unknown> = {
+      "file-1": {
+        id: "file-1",
+        project_id: PROJECT.id,
+        original_name: "survey-1.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "a".repeat(64),
+        status: "queued",
+        uploaded_at: "2026-01-01T00:00:00Z",
+        processed_at: null,
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-1",
+        superseded_by_id: null,
+      },
+      "file-2": {
+        id: "file-2",
+        project_id: PROJECT.id,
+        original_name: "survey-2.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "b".repeat(64),
+        status: "queued",
+        uploaded_at: "2026-01-02T00:00:00Z",
+        processed_at: null,
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-2",
+        superseded_by_id: null,
+      },
+    };
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "GET") return json(route, Object.values(filesById));
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/files/file-1`, async (route) => {
+      if (route.request().method() === "DELETE") {
+        delete filesById["file-1"];
+        return route.fulfill({ status: 204 });
+      }
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/files/file-2`, async (route) => {
+      if (route.request().method() === "DELETE") {
+        return json(route, { detail: "File is already archived" }, 409);
+      }
+      return route.continue();
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("survey-1.csv")).toBeVisible();
+    await expect(page.getByText("survey-2.csv")).toBeVisible();
+
+    const rows = page.locator(".file-row");
+    await rows.nth(0).locator('input[type="checkbox"]').check();
+    await rows.nth(1).locator('input[type="checkbox"]').check();
+    await expect(page.getByText("2 selected")).toBeVisible();
+
+    await page.getByRole("button", { name: "Archive selected" }).click();
+    await page.getByRole("button", { name: "Archive files" }).click();
+
+    await expect(page.getByText(/1 of 2 file\(s\) archived\. Failed: survey-2\.csv \(File is already archived\)/)).toBeVisible();
+    await expect(page.getByText("survey-1.csv", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("survey-2.csv", { exact: true })).toBeVisible();
   });
 
   test("calculation state: running a calculation renders its result", async ({ page }) => {

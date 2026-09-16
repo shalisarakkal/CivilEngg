@@ -28,8 +28,8 @@ test("create project, upload, process, inspect, calculate, and ask", async ({ pa
     buffer: Buffer.from("x,y\n0,0\n3,4\n"),
   });
   await page.getByRole("button", { name: "Upload file" }).click();
-  await expect(page.getByText("points.csv")).toBeVisible();
-  await expect(page.getByText("Ready to process")).toBeVisible();
+  await expect(page.getByText("points.csv", { exact: true })).toBeVisible();
+  await expect(page.locator(".file-status").getByText("Ready to process")).toBeVisible();
 
   // Process it and observe the status transition.
   await page.getByRole("button", { name: "Process", exact: true }).click();
