@@ -5,7 +5,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from shapely.geometry import Point, shape
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -194,7 +194,12 @@ def purge_archived_project(project_id: str, database: Session = Depends(get_db))
     if project is None or project.archived_at is None:
         raise HTTPException(status_code=404, detail="Archived project not found")
     remove_project_storage(project.id)
-    database.delete(project)
+    # A single statement relying on the schema's ON DELETE CASCADE foreign
+    # keys to remove every dependent row server-side. Loading the object
+    # graph through the ORM instead (database.delete(project)) issues one
+    # DELETE per row, which is impractically slow once a project's site
+    # model has hundreds of thousands of entities.
+    database.execute(delete(Project).where(Project.id == project.id))
     database.commit()
 
 

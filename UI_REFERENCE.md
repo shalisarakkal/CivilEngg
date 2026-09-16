@@ -22,7 +22,7 @@ Below the "New project" form, every non-archived project is listed by name with 
 
 Archiving a project (see "Archive project" below) is the only way to remove it from this list; there's no direct delete here.
 
-### Admin archive
+### Archived files
 
 Shows a running count ("N archived files") and, underneath, one row per archived file across all projects (not just the active one), each with:
 
@@ -31,7 +31,7 @@ Shows a running count ("N archived files") and, underneath, one row per archived
 
 ### Archived projects
 
-The same pattern as Admin archive, one level up: a running count ("N archived projects") and one row per archived project across the whole app, each with:
+The same pattern as Archived files, one level up: a running count ("N archived projects") and one row per archived project across the whole app, each with:
 
 - **Restore** — brings the project back to the Project list above, fully intact (files, revisions, calculations, summaries, and questions were never touched by archiving).
 - **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the project's database rows (cascading to everything under it — files, jobs, revisions, entities, calculations, summaries, questions) and its on-disk storage folder. This cannot be undone. A non-archived project can't be purged directly — it has to be archived first.
@@ -61,7 +61,7 @@ One row per file in the project (not counting archived ones), each showing:
   - *Failed or stuck processing* → **Retry** button: re-runs extraction (same action as Process, relabeled).
   - *Completed* → **Accept revision** button: turns this file's extracted content into a new site-model revision (see next section). Once accepted, the button becomes disabled and reads "Revision accepted." Only one accept can run at a time across the whole file list — the button is disabled on every row while one is in progress.
   - **Replace** button (hidden once a file has already been replaced): opens an inline "Choose a replacement file" picker plus "Upload replacement" and "Cancel" buttons directly under that file's row. Uploading here links the new file to the original as a newer version of the same document (not a coincidentally-same-named unrelated file) — the original is marked "Replaced by a newer version" and can't be replaced again itself.
-  - **Delete** button: opens a confirmation dialog ("Remove `<name>`?"). Confirming archives the file (moves it to the sidebar's Admin archive) — it is not immediately destroyed; accepted revisions and calculations built from it remain.
+  - **Delete** button: opens a confirmation dialog ("Remove `<name>`?"). Confirming archives the file (moves it to the sidebar's Archived files) — it is not immediately destroyed; accepted revisions and calculations built from it remain.
 
 ### Site model — Revision geometry
 
@@ -99,7 +99,7 @@ A form to run one deterministic geometric calculation at a time, plus a running 
 Four modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
 
 - **Archive file** — triggered by a file row's Delete button.
-- **Permanent purge (file)** — triggered by the Admin archive panel's Purge button.
+- **Permanent purge (file)** — triggered by the Archived files panel's Purge button.
 - **Archive project** — triggered by the "Archive project" button on the active project.
 - **Permanent purge (project)** — triggered by the Archived projects panel's Purge button.
 

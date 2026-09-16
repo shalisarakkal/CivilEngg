@@ -165,7 +165,7 @@ class SiteModelEntity(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     revision_id: Mapped[str] = mapped_column(
-        ForeignKey("project_revisions.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("project_revisions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     geometry: Mapped[dict[str, Any] | None] = mapped_column(JSON)
