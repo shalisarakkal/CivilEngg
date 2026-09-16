@@ -34,7 +34,7 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 
 - Frontend: Next.js, React, and plain CSS (no styling framework); a custom SVG schematic view rather than a map library
 - Backend: FastAPI and Python
-- Database: SQLite for local development, automated tests, and Playwright e2e runs. PostgreSQL/PostGIS support exists (driver dependency and migration) but isn't exercised by the normal dev/test workflow — see DATA_MODEL.md and VERIFY.md section 3
+- Database: PostgreSQL is the backend's actual default (`DATABASE_URL` in `config.py`) and what running the application locally connects to. Automated backend tests and Playwright e2e runs override this with an isolated SQLite database instead, for speed and isolation — see DATA_MODEL.md, VERIFY.md section 2 (automated tests, SQLite) and section 3 (manual PostgreSQL verification)
 - Engineering libraries: Shapely and PyProj
 - AI: a deterministic mock provider that never makes a network call; a real provider integration is deferred — see RISK_REGISTER.md
 - Local file storage for the initial deployment
@@ -42,7 +42,7 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 
 ## Development
 
-Prerequisites: Node.js, npm, Python 3.12+, and `uv`. No database installation is required — the backend defaults to SQLite automatically, which is what local development, the test suite, and Playwright all use.
+Prerequisites: Node.js, npm, Python 3.12+, `uv`, and a running PostgreSQL instance for the backend to connect to (see VERIFY.md section 3 for the exact setup this project verifies against). The automated test suite does not need PostgreSQL running — it overrides the database with an isolated SQLite instance instead.
 
 ```powershell
 Copy-Item .env.example .env
@@ -52,7 +52,7 @@ npm run build
 npm test
 ```
 
-If you're deliberately testing the PostgreSQL/PostGIS deployment path (see VERIFY.md section 3), point `DATABASE_URL` at it and run migrations:
+Point `DATABASE_URL` in `.env` at your PostgreSQL instance (or leave it unset to use the built-in default, `postgresql+psycopg://civil_engineering:civil_engineering@localhost:5432/civil_engineering`), then run migrations:
 
 ```powershell
 cd backend
@@ -74,7 +74,7 @@ uv run uvicorn --app-dir src civil_engineering.main:app --reload
 
 The frontend runs at `http://localhost:3000` and the backend health endpoint is available at `http://localhost:8000/health`.
 
-All database-backed features work out of the box against the default SQLite database; no separate database service needs to be running for local development or tests.
+Running the application locally requires PostgreSQL to be running and migrated (see VERIFY.md section 3). The automated test suite and Playwright e2e runs use an isolated SQLite database instead, so they don't require PostgreSQL to be running.
 
 Running either server on a different port than the defaults above requires updating two settings in `.env`: `NEXT_PUBLIC_API_URL` (so the frontend calls the right backend address) and `CORS_ALLOWED_ORIGINS` (so the backend accepts requests from the frontend's actual origin).
 

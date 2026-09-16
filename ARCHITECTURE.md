@@ -34,7 +34,7 @@ The AI layer receives selected site-model data and source context. Computable qu
 
 ### Data and Storage
 
-- SQLite stores application records, revisions, calculation results, and geometry for local development, automated tests, and Playwright e2e runs. PostgreSQL is supported as an alternative (driver dependency and migrations exist) for anyone deliberately running that deployment path, but it isn't part of the normal dev/test workflow.
+- PostgreSQL stores application records, revisions, calculation results, and geometry when running the application locally — it's the backend's actual default (`DATABASE_URL` in `config.py`), not an opt-in deployment path. Automated backend tests and Playwright e2e runs override this with an isolated SQLite database instead, for speed and isolation.
 - Geometry is stored as plain JSON (GeoJSON-like dicts), not native PostGIS geometry types; a PostGIS-enabling migration exists but no PostGIS-specific feature (spatial index, `ST_*` function) is used. All geometry operations run in application code via Shapely — see DATA_MODEL.md's Resolved Modeling Questions.
 - Local storage holds uploaded and generated files.
 - File metadata stores checksums, type, size, status, and source references.
@@ -46,7 +46,7 @@ User
   -> Frontend
   -> FastAPI API
   -> Project/File Services
-  -> Local Storage + SQLite (or PostgreSQL)
+  -> Local Storage + PostgreSQL (SQLite in automated tests)
   -> Processing Pipeline
   -> Normalized Site Model
   -> Calculation and AI Services

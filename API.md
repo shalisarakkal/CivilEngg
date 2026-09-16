@@ -45,11 +45,14 @@ Client and project routes are available without authentication in the current lo
 - `POST /admin/files/{file_id}/restore` - restore an archived file
 - `DELETE /admin/files/{file_id}` - permanently purge an archived file
 - `POST /projects/{project_id}/files/{file_id}/process` - start or retry processing
+- `POST /projects/{project_id}/files/{file_id}/replace` - upload a new version of an existing file
 - `GET /projects/{project_id}/files/{file_id}/extraction` - retrieve the latest normalized extraction
 - `GET /projects/{project_id}/processing` - list processing jobs
 - `GET /projects/{project_id}/processing/{job_id}` - retrieve job status and warnings
 
 Supported upload extensions are `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, `.tiff`, and `.xml` (LandXML). Uploads are limited to 50 MB, stored under the configured local storage path, and identified by a SHA-256 checksum. A duplicate checksum within the same project returns `409`, including archived records. Delete archives the physical file and preserves metadata, revisions, and calculations. Processing currently runs synchronously and records `processing`, `completed`, or `failed` status. TIFF/TIF processing records raster metadata and reports that OCR is not enabled; asynchronous execution remains a later optimization.
+
+`replace` uploads a new file linked to the target's `document_group_id` (marking the target as superseded via `superseded_by_id`), recording it as an explicit new version of the same document rather than an unrelated file that happens to share a name. Replacing an archived file, or a file that has already been replaced, returns `409`.
 
 ## Site Model
 
@@ -85,6 +88,8 @@ Geometry calculation requests include both `coordinate_unit` and output `unit`. 
 
 - `POST /projects/{project_id}/summaries` - generate a site summary
 - `POST /projects/{project_id}/questions` - ask a source-grounded question
+
+Both accept an optional `revision_ids` list (query params for `summaries`, a JSON body field for `questions`) naming which revisions to draw on. When omitted, it resolves to the project-boundary default: the single latest revision for each distinct document lineage (`SourceFile.document_group_id`) across the whole project, so a superseded (replaced) file's older revision is excluded automatically. The response's `revision_ids` records exactly what was resolved, for provenance.
 
 There is no list route for summaries or past questions; the frontend keeps them in local state as they're created within a session.
 

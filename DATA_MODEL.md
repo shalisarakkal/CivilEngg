@@ -46,6 +46,10 @@
 - `deleted_at`
 - `archived_path`
 - `status_before_delete`
+- `document_group_id`
+- `superseded_by_id`
+
+`document_group_id` identifies the logical document lineage a file belongs to — a newly uploaded file is the only member of its own group (`document_group_id == id`). `POST .../files/{file_id}/replace` uploads a new file sharing the original's `document_group_id` and sets the original's `superseded_by_id` to the new file's id, recording it as an explicit new version of the same document rather than an unrelated file that happens to share a name. A file with `superseded_by_id` set cannot be replaced again until its replacement is.
 
 ### ProcessingJob
 
@@ -82,6 +86,8 @@
 - `source_job_ids`
 - `notes`
 
+`(project_id, revision_number)` is unique at the database level, so two revisions accepted concurrently in the same project can't be assigned the same number; the accept endpoint retries with a fresh number on conflict.
+
 ### SiteModelEntity
 
 - `id`
@@ -94,6 +100,7 @@
 - `source_reference`
 - `confidence`
 - `validation_status`
+- `created_at`
 
 `entity_type` is the geometric/structural kind an extraction produced: `point`, `line`, `text`, `table`, `key_phrase`, `cogo_line`, or a lowercased raw DXF entity type (e.g. `lwpolyline`, `dimension`). It is not a civil-engineering role.
 
@@ -120,21 +127,25 @@ That role lives in `properties.semantic_type` instead, added in Phase 9: `parcel
 
 - `id`
 - `project_id`
-- `revision_id`
+- `revision_ids`
 - `content`
 - `created_at`
 
 `content` is the structured summary returned by the AI provider (`summary`, `grading`, `drainage`, `utilities`, `attention_flags`, `limitations`), stored as JSON.
 
+`revision_ids` is a JSON list, not a single foreign key. If the request doesn't name specific revisions, it's resolved at request time to the project-boundary default — the single latest revision for each distinct document lineage (`SourceFile.document_group_id`), so a superseded (replaced) file's older revision is excluded automatically. The resolved list is stored, not a live reference, so a past summary's provenance doesn't change as new revisions are accepted later.
+
 ### QuestionAnswer
 
 - `id`
 - `project_id`
-- `revision_id`
+- `revision_ids`
 - `question`
 - `intent`
 - `answer`
 - `created_at`
+
+`revision_ids` follows the same project-boundary resolution and storage rule as `ProjectSummary.revision_ids` above.
 
 `answer` is the full response returned by the AI provider, stored as JSON — it includes the answer text, method, result/unit where applicable, `source_references`, `limitations`, and `confidence`. These are not separate columns.
 
@@ -148,8 +159,9 @@ ProcessingJob 1 -- 1 ExtractedDocument
 Project 1 -- many ProjectRevision
 ProjectRevision 1 -- many SiteModelEntity
 ProjectRevision 1 -- many CalculationResult
-ProjectRevision 1 -- many ProjectSummary
-ProjectRevision 1 -- many QuestionAnswer
+ProjectRevision many -- many ProjectSummary   (via ProjectSummary.revision_ids, a JSON list)
+ProjectRevision many -- many QuestionAnswer   (via QuestionAnswer.revision_ids, a JSON list)
+SourceFile 1 -- 1 SourceFile                  (superseded_by_id, optional: the file that replaced it)
 ```
 
 ## Resolved Modeling Questions
@@ -158,8 +170,8 @@ ProjectRevision 1 -- many QuestionAnswer
 - **Normalized extraction storage:** stored in the database, as `ExtractedDocument.content` (JSON), not in file storage.
 - **Confidence and validation-status values:** `validation_status` is one of `valid`, `invalid`, or `unmapped`. `confidence` is not currently populated by any parser or acceptance path (always `null`).
 - **Retention and deletion rules for source files:** archive (soft-delete, preserves checksum/metadata), restore, and permanent purge are implemented (Phase 6); see API.md's Files and Processing section.
+- **Revision merge behavior when several files contribute to one site model:** each `ProjectRevision` still comes from exactly one extraction/file — revisions themselves are never merged. Instead, `ProjectSummary`/`QuestionAnswer` read across multiple revisions at query time via `revision_ids` (see those entities above), defaulting to one revision per document lineage across the whole project.
 
 ## Open Modeling Questions
 
-- Revision merge behavior when several files contribute to one site model (each revision today comes from exactly one extraction/file)
 - Supported coordinate reference systems, and whether a geographic (lat/lon) CRS should be rejected at calculation time (see RISK_REGISTER.md)

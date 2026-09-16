@@ -1,6 +1,6 @@
 # Verification Guide
 
-This guide verifies the current Phase 0 through Phase 9 implementation on Windows using PowerShell. Section 2 runs the automated suite against the isolated SQLite database used for local development, tests, and Playwright e2e runs — no PostgreSQL setup is required for this. Section 3 is an optional walkthrough for verifying a separately-configured local PostgreSQL/PostGIS instance, for anyone validating that production-style deployment path; it is not required for local development.
+This guide verifies the current Phase 0 through Phase 9 implementation on Windows using PowerShell. Section 2 runs the automated suite, which overrides the database with an isolated SQLite instance for speed and isolation — no PostgreSQL setup is required for this section. Section 3 walks through verifying the PostgreSQL/PostGIS instance that the running application actually connects to by default (see `config.py`'s `database_url`); it's needed before starting the backend for manual verification (Section 4), even though it's optional if you only want to run the automated test suite.
 
 ## 1. Open The Project
 
@@ -39,9 +39,9 @@ Expected results:
 
 The backend test suite currently covers models, API workflows, PDF, DXF, CSV, TXT, TIFF, LandXML extraction, site-model geometry, deterministic calculations, elevation statistics, and archive lifecycle behavior.
 
-## 3. Verify PostgreSQL/PostGIS (optional)
+## 3. Verify PostgreSQL/PostGIS
 
-This section is only relevant if you have a local PostgreSQL/PostGIS instance configured for a production-style deployment check. It is not part of the normal local development or test loop, which runs entirely on SQLite (Section 2).
+This is the database the running application actually connects to by default — required before starting the backend (Section 4) for manual local verification. It's only skippable if you exclusively run the automated test suite (Section 2), which overrides the database with SQLite instead.
 
 Check the Windows service:
 
