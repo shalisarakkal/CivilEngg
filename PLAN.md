@@ -291,6 +291,51 @@ Phase 6 lifecycle additions:
 - [x] A directional question ("north property line") returns a different, correct answer than a generic nearest-geometry query
 - [x] A question or calculation result can produce an annotated image/snippet of the source plan sheet, not just the in-app schematic view
 
+### Phase 10 - Project Lifecycle and Multi-File Operations
+
+**Objective:** Close a gap found during manual verification: a project can be archived via the API (Phase 2), but there is no restore, no permanent purge, and no UI for any of it — unlike source files, which got the full archive/restore/purge lifecycle with an admin panel in Phase 6. Also add multi-file operations within a project, so a user isn't limited to one file at a time for upload, processing, deletion, restore, and purge.
+
+**Work items:**
+
+- [ ] Add a project restore endpoint (reverse an archive)
+- [ ] Add a project permanent-purge endpoint: delete the project row (cascading to its files, jobs, revisions, entities, calculations, summaries, and Q&A history via existing `ondelete="CASCADE"` foreign keys) and delete its local storage subdirectory
+- [ ] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
+- [ ] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
+- [ ] Support selecting multiple files in a project's file list (checkboxes or a "select all")
+- [ ] Support uploading multiple files in one action instead of one at a time
+- [ ] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
+- [ ] Support processing multiple selected/queued files in one action
+- [ ] Support archiving (deleting) multiple selected files in one action
+- [ ] Support restoring multiple archived files in one action
+- [ ] Support permanently purging multiple archived files in one action
+- [ ] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list
+- [ ] Report partial success/failure clearly for every multi-file action (e.g. if one file fails to process, the others still complete and the failure is called out) rather than an all-or-nothing result
+- [ ] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases
+- [ ] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow
+
+**Exit criteria:**
+
+- [ ] A user can archive a project from the UI with confirmation, see it in an admin list, restore it, and permanently purge it — the same lifecycle files already have
+- [ ] Permanently purging a project removes its database rows and its on-disk storage directory
+- [ ] A user can select multiple files in a project and upload, process, archive, restore, or permanently purge them in a single action
+- [ ] A user can drag one or more files onto the upload area to upload them, with clear feedback while dragging and a clear rejection message for an unsupported file type
+- [ ] A user can sort a project's file list (name, date, status) and filter it (status, file type)
+- [ ] A multi-file action where one file fails still completes the others and clearly reports which failed and why
+
+### Phase 11 - Site Intelligence Follow-ups
+
+**Objective:** Close a gap found during manual verification of the multi-revision project-boundary summary/question feature (added after Phase 7): a generated site summary is persisted in the database on every request, but the workspace UI only ever holds the single most recent one in memory. Generating a new summary (e.g. for a different file or scope selection) silently replaces the one on screen, with no way to see an earlier summary again without querying the database directly — unlike questions, which already keep a visible history list.
+
+**Work items:**
+
+- [ ] Add a `GET /projects/{project_id}/summaries` endpoint listing past summaries (most recent first), matching the existing `question_answers` history pattern
+- [ ] Show generated summaries in the workspace as a history list (like the existing Q&A list) instead of a single replaceable card, each labeled with its resolved scope (whole project vs. specific revisions) and timestamp
+
+**Exit criteria:**
+
+- [ ] Generating a new summary does not hide a previously generated one from the UI
+- [ ] Each summary in the list clearly shows which revisions it covered and when it was generated
+
 ### Phase Z - MVP Release and Deployment
 
 **Objective:** Deliver a usable, repeatable MVP with a documented operational path.
