@@ -84,7 +84,7 @@ function summarizeBatchResult(verb: string, results: BatchResult[]): string {
   const succeeded = results.filter((result) => result.ok).length;
   const failed = results.length - succeeded;
   if (failed === 0) return `${succeeded} file(s) ${verb}.`;
-  if (succeeded === 0) return `${verb[0].toUpperCase()}${verb.slice(1)} failed for all ${failed} file(s).`;
+  if (succeeded === 0) return `All ${failed} file(s) failed to be ${verb}.`;
   return `${succeeded} of ${results.length} file(s) ${verb}, ${failed} failed.`;
 }
 
@@ -484,10 +484,20 @@ export default function ProjectWorkspace() {
     }
   }
 
-  async function uploadFiles(filesToUpload: File[]) {
-    if (!selectedProject || filesToUpload.length === 0) return;
+  async function uploadFiles(filesToUpload: File[], clientRejected: File[] = []) {
+    if (!selectedProject || (filesToUpload.length === 0 && clientRejected.length === 0)) return;
     setLoading(true);
-    const results: BatchResult[] = [];
+    // Files rejected client-side (e.g. an unsupported extension dropped onto the
+    // panel) never reach the server, but still need to appear in the same
+    // summary/details breakdown as the ones that were actually uploaded.
+    const rejectedResults: BatchResult[] = clientRejected.map((file) => ({
+      name: file.name,
+      ok: false,
+      detail: "Unsupported file type",
+      retryable: false,
+      reason: "rejected",
+    }));
+    const uploadResults: BatchResult[] = [];
     try {
       for (const file of filesToUpload) {
         try {
@@ -495,27 +505,30 @@ export default function ProjectWorkspace() {
           formData.append("file", file);
           const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
           if (response.ok) {
-            results.push({ name: file.name, ok: true, detail: "" });
+            uploadResults.push({ name: file.name, ok: true, detail: "" });
           } else {
             const error = await response.json().catch(() => ({}));
-            // A duplicate-content rejection (409) would only fail the same way again on retry.
-            results.push({
+            // A duplicate-content (409) or validation (400: unsupported type, too
+            // large, empty, invalid filename) rejection would only fail the same
+            // way again on retry, so neither is kept selected for one.
+            uploadResults.push({
               name: file.name,
               ok: false,
               detail: error.detail ?? `HTTP ${response.status}`,
-              retryable: response.status !== 409,
+              retryable: response.status !== 409 && response.status !== 400,
               reason: response.status === 409 ? "duplicate" : response.status === 400 ? "rejected" : undefined,
             });
           }
         } catch (error) {
-          results.push({ name: file.name, ok: false, detail: error instanceof Error ? error.message : "request failed", retryable: true });
+          uploadResults.push({ name: file.name, ok: false, detail: error instanceof Error ? error.message : "request failed", retryable: true });
         }
       }
-      await loadProjectData(selectedProject);
-      setMessage(summarizeBatchResult("uploaded and queued for processing", results), results.length > 1 ? results : null);
+      if (filesToUpload.length > 0) await loadProjectData(selectedProject);
+      const allResults = [...rejectedResults, ...uploadResults];
+      setMessage(summarizeBatchResult("uploaded and queued for processing", allResults), allResults.length > 1 ? allResults : null);
     } finally {
       setLoading(false);
-      setPendingFiles(filesToUpload.filter((_, index) => results[index] && !results[index].ok && results[index].retryable !== false));
+      setPendingFiles(filesToUpload.filter((_, index) => uploadResults[index] && !uploadResults[index].ok && uploadResults[index].retryable !== false));
       const input = document.getElementById("source-file") as HTMLInputElement | null;
       if (input) input.value = "";
     }
@@ -540,10 +553,7 @@ export default function ProjectWorkspace() {
     if (dropped.length === 0) return;
     const accepted = dropped.filter((file) => ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
     const rejected = dropped.filter((file) => !ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
-    if (rejected.length > 0) {
-      setMessage(`${rejected.length} file(s) rejected (unsupported type): ${rejected.map((file) => file.name).join(", ")}.`);
-    }
-    if (accepted.length > 0) void uploadFiles(accepted);
+    void uploadFiles(accepted, rejected);
   }
 
   async function replaceFile(file: SourceFile) {

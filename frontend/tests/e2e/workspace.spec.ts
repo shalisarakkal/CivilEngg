@@ -152,6 +152,70 @@ test.describe("project workspace", () => {
     await expect(page.getByText("survey-2.csv")).toBeVisible();
   });
 
+  test("upload state: dropping a mix of supported and unsupported files reports one summary with details", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "POST") {
+        return json(
+          route,
+          {
+            id: "file-1",
+            project_id: PROJECT.id,
+            original_name: "good.csv",
+            media_type: "text/csv",
+            size_bytes: 20,
+            checksum: "a".repeat(64),
+            status: "queued",
+            uploaded_at: "2026-01-01T00:00:00Z",
+            processed_at: null,
+            error_message: null,
+            deleted_at: null,
+            document_group_id: "file-1",
+            superseded_by_id: null,
+          },
+          201,
+        );
+      }
+      return json(route, [
+        {
+          id: "file-1",
+          project_id: PROJECT.id,
+          original_name: "good.csv",
+          media_type: "text/csv",
+          size_bytes: 20,
+          checksum: "a".repeat(64),
+          status: "queued",
+          uploaded_at: "2026-01-01T00:00:00Z",
+          processed_at: null,
+          error_message: null,
+          deleted_at: null,
+          document_group_id: "file-1",
+          superseded_by_id: null,
+        },
+      ]);
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    // Drag-and-drop bypasses the file input, so simulate the browser's drop
+    // event directly on the upload panel with a mix of an allowed and a
+    // disallowed extension.
+    await page.evaluate(() => {
+      const panel = document.querySelector(".upload-panel");
+      if (!panel) throw new Error("upload panel not found");
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(["x,y\n0,0\n"], "good.csv", { type: "text/csv" }));
+      dataTransfer.items.add(new File(["bad"], "bad.exe", { type: "application/octet-stream" }));
+      panel.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
+    });
+
+    await expect(page.getByText("1 of 2 file(s) uploaded and queued for processing, 1 failed.")).toBeVisible();
+    await page.getByRole("button", { name: "Show details" }).click();
+    await expect(page.locator(".batch-details-group", { hasText: "Successful" })).toContainText("good.csv");
+    await expect(page.locator(".batch-details-group", { hasText: "Failed — not supported" })).toContainText("bad.exe — Unsupported file type");
+  });
+
   test("batch actions: selecting files in the list shows a batch toolbar that archives them together", async ({ page }) => {
     const filesById: Record<string, unknown> = {
       "file-1": {
@@ -314,6 +378,36 @@ test.describe("project workspace", () => {
     await uploadButton.click();
 
     await expect(page.getByText("Unsupported file type")).toBeVisible();
+    // An unsupported-type rejection would only fail the same way again, so the
+    // picker resets instead of leaving the file selected for a pointless retry.
+    await expect(page.getByText("Choose source file(s)")).toBeVisible();
+    await expect(uploadButton).toBeDisabled();
+  });
+
+  test("error state: a transient upload failure keeps the file selected for retry", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "POST") {
+        return json(route, { detail: "Internal Server Error" }, 500);
+      }
+      return json(route, []);
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "survey.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("x,y\n0,0\n"),
+    });
+    const uploadButton = page.getByRole("button", { name: "Upload file" });
+    await uploadButton.click();
+
+    await expect(page.getByText("survey.csv could not be uploaded and queued for processing")).toBeVisible();
+    // Unlike a duplicate or unsupported-type rejection, a server error might
+    // succeed on retry, so the file stays selected.
+    await expect(page.getByText("1 file selected")).toBeVisible();
     await expect(uploadButton).toBeEnabled();
   });
 });
