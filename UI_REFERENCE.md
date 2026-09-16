@@ -25,10 +25,13 @@ Archiving a project (see "Archive project" below) is the only way to remove it f
 
 ### Archived files
 
-Shows a running count ("N archived files") and, underneath, one row per archived file across all projects (not just the active one), each with:
+Shows a running count ("N archived files") and, underneath, a "Select all" checkbox plus one row per archived file across all projects (not just the active one), each with:
 
+- **A checkbox** — selecting one or more files reveals a small "Restore (N)" / "Purge (N)" toolbar next to "Select all" that applies to every selected file at once, in addition to the per-row buttons below.
 - **Restore** — brings the file back to its project's normal file list, in whatever status it had when archived.
 - **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the file's database record and on-disk copy. Accepted revisions and calculations that already exist stay intact; only the original source file becomes unrecoverable.
+
+The batch "Purge (N)" button opens the same style of confirmation dialog, listing every selected file by name. Either way, if one file in the batch fails (e.g. it was already restored elsewhere a moment ago), the status banner reports exactly which one and why, and the rest still complete.
 
 ### Archived projects
 
@@ -45,14 +48,23 @@ At the top, next to the project name, an **"Archive project"** button opens a co
 
 ### Source files (upload)
 
-- **File picker** ("Choose a source file") — opens the OS file dialog, restricted to `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, `.tiff`, `.xml`. Selecting a file shows its name in place of the placeholder text.
-- **"Upload file" button** — disabled until a file is chosen. Uploads the selected file to the active project. On success, the file appears at the top of the file list below with status "Ready to process," the picker resets to its placeholder, and the status banner names the file ("`<name>` uploaded and queued for processing."). On a duplicate-content rejection (identical file already exists in this project), the picker also resets so you're not stuck reselecting the same rejected file; on any other failure, the picker keeps your selection so you can retry.
+- **File picker** ("Choose source file(s)") — opens the OS file dialog, restricted to `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, `.tiff`, `.xml`, and allows selecting several files at once. Selecting files shows a count ("N file(s) selected") in place of the placeholder text.
+- **Drag and drop** — the whole source-files panel is also a drop target: dragging one or more files over it highlights the panel and shows a "Drop files to upload..." hint. Dropped files with an unsupported extension are rejected before any upload attempt (named in the status banner); every accepted file is uploaded the same way as if picked manually.
+- **"Upload file(s)" button** — disabled until at least one file is chosen. Uploads every selected file to the active project (one request per file). On success, each file appears at the top of the file list below with status "Ready to process," and the status banner reports how many succeeded (e.g. "3 file(s) uploaded and queued for processing."). If any fail, the banner instead names each failure and its reason (e.g. "2 of 3 file(s) uploaded and queued for processing. Failed: sr658.xml (File with this content already exists)"). A duplicate-content (409) rejection is dropped from the picker afterward since retrying would only fail the same way again; any other kind of failure leaves that file selected so you can retry just it.
 
 ### File list
 
-One row per file in the project (not counting archived ones), each showing:
+A "Select all" checkbox in the list header, sort/filter controls, and one row per file in the project (not counting archived ones).
 
-- **Name, size, and checksum.**
+- **Sort** — Upload date (newest first, the default), Name, or Status.
+- **Status filter** — All statuses, or one specific status (Ready to process, Processing, Completed, Failed).
+- **Type filter** — All types, or one specific extension (PDF, DXF, CSV, TXT, TIFF, LandXML). TIFF and TIF files are grouped together.
+
+Selecting one or more files (via each row's checkbox, or "Select all," which respects the current sort/filter) reveals a batch toolbar: **"Process selected,"** **"Archive selected"** (opens the same style of confirmation dialog as a single delete, listing every selected file by name), and **"Clear selection."** Every batch action reports partial success/failure by name in the status banner (e.g. "1 of 2 file(s) archived. Failed: sr658.xml (File is already archived)") rather than succeeding or failing as a single unit.
+
+Each row shows:
+
+- **A checkbox**, name, size, and checksum.
 - **"Replaced by a newer version"** (italic, only if this file has since been replaced — see "Replace" below).
 - **Error message** (red, only if processing failed).
 - **Processing warnings** (amber, only if completed with warnings — capped at 3 lines with a "+N more warning(s)" summary if there are more).
@@ -63,6 +75,8 @@ One row per file in the project (not counting archived ones), each showing:
   - *Completed* → **Accept revision** button: turns this file's extracted content into a new site-model revision (see next section). Once accepted, the button becomes disabled and reads "Revision accepted." Only one accept can run at a time across the whole file list — the button is disabled on every row while one is in progress.
   - **Replace** button (hidden once a file has already been replaced): opens an inline "Choose a replacement file" picker plus "Upload replacement" and "Cancel" buttons directly under that file's row. Uploading here links the new file to the original as a newer version of the same document (not a coincidentally-same-named unrelated file) — the original is marked "Replaced by a newer version" and can't be replaced again itself.
   - **Delete** button: opens a confirmation dialog ("Remove `<name>`?"). Confirming archives the file (moves it to the sidebar's Archived files) — it is not immediately destroyed; accepted revisions and calculations built from it remain.
+
+All row-level and batch actions are disabled while any batch action is in progress, so a selection can't be acted on twice at once.
 
 ### Site model — Revision geometry
 
@@ -97,12 +111,14 @@ A form to run one deterministic geometric calculation at a time, plus a running 
 
 ## Confirmation Dialogs
 
-Four modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
+Six modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
 
 - **Archive file** — triggered by a file row's Delete button.
 - **Permanent purge (file)** — triggered by the Archived files panel's Purge button.
 - **Archive project** — triggered by the "Archive project" button on the active project.
 - **Permanent purge (project)** — triggered by the Archived projects panel's Purge button.
+- **Archive files (batch)** — triggered by the file list's "Archive selected" button; lists every selected file by name.
+- **Permanent purge (batch)** — triggered by the Archived files panel's "Purge (N)" button; lists every selected file by name.
 
 ---
 

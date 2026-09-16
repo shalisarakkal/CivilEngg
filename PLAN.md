@@ -302,26 +302,27 @@ Phase 6 lifecycle additions:
 - [x] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
 - [x] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
 - [ ] Fix the empty-workspace state showing "Create your first project" even when projects exist (found via the new archive action: archiving the currently-active project always clears the selection to null, even when other projects remain). Show "Select your project" instead when one or more projects exist but none is selected, and auto-select the remaining project when exactly one is left after an action like archiving.
-- [ ] Support selecting multiple files in a project's file list (checkboxes or a "select all")
-- [ ] Support uploading multiple files in one action instead of one at a time
-- [ ] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
-- [ ] Support processing multiple selected/queued files in one action
-- [ ] Support archiving (deleting) multiple selected files in one action
-- [ ] Support restoring multiple archived files in one action
-- [ ] Support permanently purging multiple archived files in one action
-- [ ] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list
-- [ ] Report partial success/failure clearly for every multi-file action (e.g. if one file fails to process, the others still complete and the failure is called out) rather than an all-or-nothing result
-- [ ] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases (project-lifecycle endpoints done in `test_api.py`; multi-file batch paths still open)
-- [ ] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow
+- [x] Support selecting multiple files in a project's file list (checkboxes or a "select all")
+- [x] Support uploading multiple files in one action instead of one at a time
+- [x] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
+- [x] Support processing multiple selected/queued files in one action
+- [x] Support archiving (deleting) multiple selected files in one action
+- [x] Support restoring multiple archived files in one action
+- [x] Support permanently purging multiple archived files in one action
+- [x] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list
+- [x] Report partial success/failure clearly for every multi-file action (e.g. if one file fails to process, the others still complete and the failure is called out) rather than an all-or-nothing result
+- [x] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases. Multi-file operations turned out not to need new backend endpoints at all: each batch action (upload, process, archive, restore, purge) is the frontend calling the same existing single-file endpoint once per selected file (`Promise.all` for process/archive/restore/purge, sequential for upload to preserve duplicate-checksum ordering) and aggregating the per-file results into one status message. So "API integration tests for batch paths" is covered by the existing single-file endpoint tests in `test_api.py` plus the new Playwright coverage below, which exercises the aggregation and partial-failure reporting directly.
+- [ ] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow. The multi-file half is done (multi-file upload and a partial-failure batch archive, in `workspace.spec.ts`); project archive/restore/purge still has no dedicated Playwright test and remains open.
+- [ ] Fix the empty-workspace state showing "Create your first project" even when projects exist (found via the new archive action: archiving the currently-active project always clears the selection to null, even when other projects remain). Show "Select your project" instead when one or more projects exist but none is selected, and auto-select the remaining project when exactly one is left after an action like archiving.
 
 **Exit criteria:**
 
 - [x] A user can archive a project from the UI with confirmation, see it in an admin list, restore it, and permanently purge it — the same lifecycle files already have
 - [x] Permanently purging a project removes its database rows and its on-disk storage directory
-- [ ] A user can select multiple files in a project and upload, process, archive, restore, or permanently purge them in a single action
-- [ ] A user can drag one or more files onto the upload area to upload them, with clear feedback while dragging and a clear rejection message for an unsupported file type
-- [ ] A user can sort a project's file list (name, date, status) and filter it (status, file type)
-- [ ] A multi-file action where one file fails still completes the others and clearly reports which failed and why
+- [x] A user can select multiple files in a project and upload, process, archive, restore, or permanently purge them in a single action
+- [x] A user can drag one or more files onto the upload area to upload them, with clear feedback while dragging and a clear rejection message for an unsupported file type
+- [x] A user can sort a project's file list (name, date, status) and filter it (status, file type)
+- [x] A multi-file action where one file fails still completes the others and clearly reports which failed and why
 
 ### Phase 11 - Site Intelligence Follow-ups
 
