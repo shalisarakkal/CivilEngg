@@ -3,15 +3,15 @@
 import { FormEvent, useEffect, useState } from "react";
 
 type Project = { id: string; name: string; description: string | null; default_unit_system: string };
-type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null };
-type ProcessingJob = { id: string; source_file_id: string; status: string };
+type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null; document_group_id: string; superseded_by_id: string | null };
+type ProcessingJob = { id: string; source_file_id: string; status: string; warnings: string[] | null };
 type Revision = { id: string; revision_number: number; created_at: string; source_job_ids: string[] | null; notes: string | null };
 type Entity = { id: string; entity_type: string; geometry: Record<string, unknown> | null; properties: Record<string, unknown> | null; validation_status: string; source_reference: Record<string, unknown> | null };
 type Calculation = { id: string; calculation_type: string; result: number; unit: string; formula: string; assumptions: unknown[] | null; revision_id: string | null; inputs: Record<string, unknown> };
 type SummaryContent = { summary: string; grading: string; drainage: string; utilities: string; attention_flags: string[]; limitations: string[] };
-type Summary = { id: string; content: SummaryContent; created_at: string };
+type Summary = { id: string; content: SummaryContent; created_at: string; revision_ids: string[] | null };
 type Answer = { answer: string; method: string; confidence: number; result?: number; unit?: string; formula?: string; limitations?: string[]; source_references?: (Record<string, unknown> | null)[]; source_excerpts?: string[] };
-type QuestionAnswerRecord = { id: string; question: string; intent: string; answer: Answer; created_at: string };
+type QuestionAnswerRecord = { id: string; question: string; intent: string; answer: Answer; created_at: string; revision_ids: string[] | null };
 
 type CalculationType = "slope" | "distance" | "area" | "perimeter";
 type PerimeterGeometryType = "LineString" | "Polygon";
@@ -41,12 +41,34 @@ function calculationGeometries(inputs: Record<string, unknown>): Record<string, 
     .filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null);
 }
 
-function processingStatusLabel(status: string) {
-  if (status === "completed") return "Processing completed";
+function processingStatusLabel(status: string, hasWarnings: boolean) {
+  if (status === "completed") return hasWarnings ? "Processing completed with warnings" : "Processing completed";
   if (status === "failed") return "Processing failed";
   if (status === "processing") return "Processing...";
   if (status === "queued") return "Ready to process";
   return status;
+}
+
+function latestJobWarnings(jobs: ProcessingJob[], fileId: string): string[] {
+  return jobs.find((job) => job.source_file_id === fileId)?.warnings ?? [];
+}
+
+const MAX_DISPLAYED_WARNINGS = 3;
+
+function summarizeWarnings(warnings: string[]): string[] {
+  const unique = Array.from(new Set(warnings));
+  if (unique.length <= MAX_DISPLAYED_WARNINGS) return unique;
+  const shown = unique.slice(0, MAX_DISPLAYED_WARNINGS);
+  return [...shown, `+${unique.length - MAX_DISPLAYED_WARNINGS} more warning(s)`];
+}
+
+function formatCalculationInputs(inputs: Record<string, unknown>): string {
+  return Object.entries(inputs)
+    .map(([key, value]) => {
+      const text = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+      return `${key}: ${text}`;
+    })
+    .join(", ");
 }
 
 function GeometryPreview({
@@ -131,6 +153,9 @@ export default function ProjectWorkspace() {
   const [planSnippetError, setPlanSnippetError] = useState<string | null>(null);
   const [planSnippetLoading, setPlanSnippetLoading] = useState(false);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [qaRevisionIds, setQaRevisionIds] = useState<string[]>([]);
+  const [replacingFileId, setReplacingFileId] = useState<string | null>(null);
+  const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [entityPage, setEntityPage] = useState(0);
   const entityPageSize = 200;
   const entityPageCount = Math.max(1, Math.ceil(entities.length / entityPageSize));
@@ -141,6 +166,27 @@ export default function ProjectWorkspace() {
     const sourceJobId = revision.source_job_ids?.[0];
     const job = processingJobs.find((item) => item.id === sourceJobId);
     return files.find((file) => file.id === job?.source_file_id);
+  }
+
+  function toggleQaRevision(revisionId: string) {
+    setQaRevisionIds((current) =>
+      current.includes(revisionId)
+        ? current.filter((id) => id !== revisionId)
+        : [...current, revisionId]
+    );
+  }
+
+  function qaScopeLabel(revisionIds: string[] | null): string {
+    if (!revisionIds || revisionIds.length === 0) return "Whole project";
+    return revisionIds
+      .map((id) => {
+        const revision = revisions.find((item) => item.id === id);
+        const sourceFile = revision ? revisionSourceFile(revision) : undefined;
+        return revision
+          ? `Revision ${revision.revision_number} · ${sourceFile?.original_name ?? "Unknown file"}`
+          : "Unknown revision";
+      })
+      .join(", ");
   }
 
   async function loadProjectData(project: Project) {
@@ -287,6 +333,7 @@ export default function ProjectWorkspace() {
   async function uploadFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProject || !selectedFile) return;
+    const fileName = selectedFile.name;
     setLoading(true);
     try {
       const formData = new FormData();
@@ -294,18 +341,60 @@ export default function ProjectWorkspace() {
       const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
       if (response.ok) {
         setSelectedFile(null);
-        setMessage("File uploaded and queued for processing.");
+        setMessage(`${fileName} uploaded and queued for processing.`);
         await loadProjectData(selectedProject);
         const input = document.getElementById("source-file") as HTMLInputElement | null;
         if (input) input.value = "";
       } else {
         const error = await response.json().catch(() => ({}));
-        setMessage(error.detail ?? "File could not be uploaded.");
+        setMessage(error.detail ?? `${fileName} could not be uploaded.`);
+        if (response.status === 409) {
+          // Duplicate content: retrying with the same file would only fail the same way again.
+          setSelectedFile(null);
+          const input = document.getElementById("source-file") as HTMLInputElement | null;
+          if (input) input.value = "";
+        }
       }
     } catch (error) {
-      setMessage(error instanceof Error ? `Upload request failed: ${error.message}` : "Upload request failed.");
+      setMessage(
+        error instanceof Error
+          ? `${fileName} upload request failed: ${error.message}`
+          : `${fileName} upload request failed.`
+      );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function replaceFile(file: SourceFile) {
+    if (!selectedProject || !replacementFile || busyAction !== null) return;
+    const fileName = replacementFile.name;
+    setBusyAction(`replace:${file.id}`);
+    setMessage(`Uploading ${fileName} as a new version of ${file.original_name}...`);
+    try {
+      const formData = new FormData();
+      formData.append("file", replacementFile);
+      const response = await fetch(
+        `${apiUrl}/projects/${selectedProject.id}/files/${file.id}/replace`,
+        { method: "POST", body: formData }
+      );
+      if (response.ok) {
+        setMessage(`${fileName} uploaded as a new version of ${file.original_name}.`);
+        setReplacingFileId(null);
+        setReplacementFile(null);
+        await loadProjectData(selectedProject);
+      } else {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `${fileName} could not be uploaded as a replacement.`);
+      }
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `Replace request failed: ${error.message}`
+          : "Replace request failed."
+      );
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -408,7 +497,7 @@ export default function ProjectWorkspace() {
   }
 
   async function acceptRevision(file: SourceFile) {
-    if (!selectedProject || acceptingFileId === file.id || acceptedFileIds.includes(file.id)) return;
+    if (!selectedProject || acceptingFileId !== null || acceptedFileIds.includes(file.id)) return;
     setAcceptingFileId(file.id);
     setMessage(`Accepting revision for ${file.original_name}...`);
     try {
@@ -474,7 +563,9 @@ export default function ProjectWorkspace() {
     if (!selectedProject) return;
     setLoading(true);
     try {
-      const query = selectedRevisionId ? `?revision_id=${selectedRevisionId}` : "";
+      const params = new URLSearchParams();
+      qaRevisionIds.forEach((id) => params.append("revision_ids", id));
+      const query = params.toString() ? `?${params.toString()}` : "";
       const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/summaries${query}`, { method: "POST" });
       if (response.ok) {
         setSummary(await response.json());
@@ -498,7 +589,10 @@ export default function ProjectWorkspace() {
       const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/questions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: questionText.trim(), revision_id: selectedRevisionId }),
+        body: JSON.stringify({
+          question: questionText.trim(),
+          revision_ids: qaRevisionIds.length > 0 ? qaRevisionIds : null,
+        }),
       });
       if (response.ok) {
         const record: QuestionAnswerRecord = await response.json();
@@ -585,6 +679,7 @@ export default function ProjectWorkspace() {
         <div><p className="eyebrow">Civil engineering intelligence</p><h1>Project workspace</h1></div>
         <span className="status">Phase 6 active</span>
       </header>
+      <p className="message" role="status">{message}</p>
       <section className="workspace-grid">
         <aside className="project-panel">
           <p className="eyebrow">Projects</p>
@@ -602,14 +697,13 @@ export default function ProjectWorkspace() {
           {selectedProject ? <>
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><span className="project-mark">06</span></div>
             <div className="upload-panel"><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB.</p></div><form className="upload-form" onSubmit={uploadFile}><label className="file-picker" htmlFor="source-file"><span>{selectedFile?.name ?? "Choose a source file"}</span><input id="source-file" type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label><button type="submit" disabled={loading || selectedFile === null}>Upload file</button></form></div>
-            <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}</div><div className="file-status"><span>{processingStatusLabel(file.status)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId === file.id} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>)}</div>
+            <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>; })}</div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}</small></button>)}</div>}</section>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site intelligence</p><h3>Summarize and ask questions.</h3><p className="calculation-help">Answers are grounded in the accepted site model and calculations. AI-generated content is clearly labeled and never invents a measurement.</p></div><button type="button" className="secondary-button" disabled={loading || revisions.length === 0} onClick={() => void requestSummary()}>Request site summary</button></div>{summary && <div className="summary-card"><p>{summary.content.summary}</p><dl><div><dt>Grading</dt><dd>{summary.content.grading}</dd></div><div><dt>Drainage</dt><dd>{summary.content.drainage}</dd></div><div><dt>Utilities</dt><dd>{summary.content.utilities}</dd></div></dl>{summary.content.attention_flags.length > 0 && <div className="attention-flags"><strong>Attention</strong><ul>{summary.content.attention_flags.map((flag, index) => <li key={index}>{flag}</li>)}</ul></div>}<p className="ai-label">AI-generated · {summary.content.limitations.join(" ")}</p></div>}<form className="question-form" onSubmit={askQuestion}><label>Ask a question<input value={questionText} onChange={(event) => setQuestionText(event.target.value)} placeholder="What is the setback distance?" maxLength={2000} /></label><button type="submit" className="secondary-button" disabled={loading || !questionText.trim()}>Ask</button></form>{questionHistory.length > 0 && <div className="qa-list">{questionHistory.map((record) => <div className="qa-card" key={record.id}><p className="qa-question">{record.question}</p><p className="qa-answer">{record.answer.answer}</p><small className="ai-label">AI-generated · {record.answer.method} · confidence {record.answer.confidence.toFixed(2)}</small>{record.answer.limitations && record.answer.limitations.length > 0 && <small className="qa-limitations">{record.answer.limitations.join(" ")}</small>}</div>)}</div>}</section>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}<span className="result-inputs">{formatCalculationInputs(calculation.inputs)}</span></small></button>)}</div>}</section>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site intelligence</p><h3>Summarize and ask questions.</h3><p className="calculation-help">Answers are grounded in the accepted site model and calculations. AI-generated content is clearly labeled and never invents a measurement.</p></div><button type="button" className="secondary-button" disabled={loading || revisions.length === 0} onClick={() => void requestSummary()}>Request site summary</button></div>{revisions.length > 0 && <div className="qa-scope"><p className="eyebrow">Scope</p><p className="muted">{qaRevisionIds.length === 0 ? "Whole project (every accepted document's latest revision)." : "Selected revisions only."}</p><div className="qa-scope-options">{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <label key={revision.id} className="qa-scope-option"><input type="checkbox" checked={qaRevisionIds.includes(revision.id)} onChange={() => toggleQaRevision(revision.id)} /><span>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"}</span></label>; })}</div></div>}{summary && <div className="summary-card"><p>{summary.content.summary}</p><dl><div><dt>Grading</dt><dd>{summary.content.grading}</dd></div><div><dt>Drainage</dt><dd>{summary.content.drainage}</dd></div><div><dt>Utilities</dt><dd>{summary.content.utilities}</dd></div></dl>{summary.content.attention_flags.length > 0 && <div className="attention-flags"><strong>Attention</strong><ul>{summary.content.attention_flags.map((flag, index) => <li key={index}>{flag}</li>)}</ul></div>}<p className="ai-label">AI-generated · scope: {qaScopeLabel(summary.revision_ids)} · {summary.content.limitations.join(" ")}</p></div>}<form className="question-form" onSubmit={askQuestion}><label>Ask a question<input value={questionText} onChange={(event) => setQuestionText(event.target.value)} placeholder="What is the setback distance?" maxLength={2000} /></label><button type="submit" className="secondary-button" disabled={loading || !questionText.trim()}>Ask</button></form>{questionHistory.length > 0 && <div className="qa-list">{questionHistory.map((record) => <div className="qa-card" key={record.id}><p className="qa-question">{record.question}</p><p className="qa-answer">{record.answer.answer}</p><small className="ai-label">AI-generated · {record.answer.method} · confidence {record.answer.confidence.toFixed(2)} · scope: {qaScopeLabel(record.revision_ids)}</small>{record.answer.limitations && record.answer.limitations.length > 0 && <small className="qa-limitations">{record.answer.limitations.join(" ")}</small>}</div>)}</div>}</section>
             {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
             {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
           </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
-          <p className="message" role="status">{message}</p>
         </section>
       </section>
     </main>
