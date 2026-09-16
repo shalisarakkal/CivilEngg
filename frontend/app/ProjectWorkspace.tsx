@@ -75,7 +75,6 @@ function fileTypeGroup(name: string): string {
 }
 
 type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number };
-type BatchActivityEntry = { id: string; timestamp: number; text: string; details: BatchResult[]; successLabel: string };
 
 // Browsers deliberately never expose a selected/dropped file's filesystem
 // path (only its name) as a privacy/security measure, so this is the most
@@ -128,19 +127,6 @@ function formatCalculationInputs(inputs: Record<string, unknown>): string {
       return `${key}: ${text}`;
     })
     .join(", ");
-}
-
-function BatchDetailsPanel({ results, successLabel }: { results: BatchResult[]; successLabel: string }) {
-  return (
-    <div className="batch-details">
-      {groupBatchResults(results, successLabel).map((group) => (
-        <div className="batch-details-group" key={group.label}>
-          <strong>{group.label} ({group.items.length})</strong>
-          <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.size !== undefined ? ` (${formatFileSize(item.size)})` : ""}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function GeometryPreview({
@@ -235,34 +221,6 @@ export default function ProjectWorkspace() {
     setMessageDetails(details);
     setMessageSuccessLabel(successLabel);
     setShowMessageDetails(false);
-  }
-
-  // A completed multi-file batch (upload/process/archive/restore/purge) can
-  // take long enough that its status banner gets overwritten by an unrelated
-  // action (e.g. running a calculation) before it's been seen. This keeps the
-  // last few batch outcomes around so one isn't silently lost that way.
-  const [batchActivity, setBatchActivity] = useState<BatchActivityEntry[]>([]);
-  const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(new Set());
-  const MAX_BATCH_ACTIVITY = 5;
-
-  function toggleActivityDetails(id: string) {
-    setExpandedActivityIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function reportBatchOutcome(verb: string, results: BatchResult[], successLabel = "Successful") {
-    const text = summarizeBatchResult(verb, results);
-    setMessage(text, results.length > 1 ? results : null, successLabel);
-    if (results.length > 1) {
-      setBatchActivity((current) => {
-        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        return [{ id, timestamp: Date.now(), text, details: results, successLabel }, ...current].slice(0, MAX_BATCH_ACTIVITY);
-      });
-    }
   }
   const [loading, setLoading] = useState(false);
   const [filePendingDelete, setFilePendingDelete] = useState<SourceFile | null>(null);
@@ -586,7 +544,7 @@ export default function ProjectWorkspace() {
       }
       if (filesToUpload.length > 0) await loadProjectData(selectedProject);
       const allResults = [...rejectedResults, ...uploadResults];
-      reportBatchOutcome("uploaded and queued for processing", allResults);
+      setMessage(summarizeBatchResult("uploaded and queued for processing", allResults), allResults.length > 1 ? allResults : null);
     } finally {
       setLoading(false);
       setPendingFiles(filesToUpload.filter((_, index) => uploadResults[index] && !uploadResults[index].ok && uploadResults[index].retryable !== false));
@@ -824,7 +782,7 @@ export default function ProjectWorkspace() {
       }),
     );
     await loadProjectData(selectedProject);
-    reportBatchOutcome("processed", results);
+    setMessage(summarizeBatchResult("processed", results), results.length > 1 ? results : null);
     setSelectedFileIds(new Set());
     setBatchBusy(null);
   }
@@ -849,7 +807,7 @@ export default function ProjectWorkspace() {
     const archivedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setFiles((current) => current.filter((file) => !archivedIds.has(file.id)));
     await loadArchivedFiles();
-    reportBatchOutcome("archived", results);
+    setMessage(summarizeBatchResult("archived", results), results.length > 1 ? results : null);
     setSelectedFileIds(new Set());
     setBatchBusy(null);
     setFilesPendingBatchDelete(null);
@@ -875,7 +833,7 @@ export default function ProjectWorkspace() {
     const restoredIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setArchivedFiles((current) => current.filter((file) => !restoredIds.has(file.id)));
     if (selectedProject) await loadProjectData(selectedProject);
-    reportBatchOutcome("restored", results);
+    setMessage(summarizeBatchResult("restored", results), results.length > 1 ? results : null);
     setSelectedArchivedFileIds(new Set());
     setBatchBusy(null);
   }
@@ -899,7 +857,7 @@ export default function ProjectWorkspace() {
     );
     const purgedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setArchivedFiles((current) => current.filter((file) => !purgedIds.has(file.id)));
-    reportBatchOutcome("permanently deleted", results);
+    setMessage(summarizeBatchResult("permanently deleted", results), results.length > 1 ? results : null);
     setSelectedArchivedFileIds(new Set());
     setBatchBusy(null);
     setArchivedFilesPendingBatchPurge(null);
@@ -1113,27 +1071,14 @@ export default function ProjectWorkspace() {
         )}
       </p>
       {messageDetails && messageDetails.length > 1 && showMessageDetails && (
-        <div className="message-details-wrap" role="status"><BatchDetailsPanel results={messageDetails} successLabel={messageSuccessLabel} /></div>
-      )}
-      {batchActivity.length > 0 && (
-        <section className="activity-log">
-          <p className="eyebrow">Recent activity</p>
-          {batchActivity.map((entry) => {
-            const expanded = expandedActivityIds.has(entry.id);
-            return (
-              <div className="activity-entry" key={entry.id}>
-                <div className="activity-entry-line">
-                  <span className="activity-time">{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                  <span>{entry.text}</span>
-                  <button type="button" className="message-details-toggle" onClick={() => toggleActivityDetails(entry.id)}>
-                    {expanded ? "Hide details" : "Show details"}
-                  </button>
-                </div>
-                {expanded && <BatchDetailsPanel results={entry.details} successLabel={entry.successLabel} />}
-              </div>
-            );
-          })}
-        </section>
+        <div className="batch-details" role="status">
+          {groupBatchResults(messageDetails, messageSuccessLabel).map((group) => (
+            <div className="batch-details-group" key={group.label}>
+              <strong>{group.label} ({group.items.length})</strong>
+              <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.size !== undefined ? ` (${formatFileSize(item.size)})` : ""}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
+            </div>
+          ))}
+        </div>
       )}
       <section className="workspace-grid">
         <aside className="project-panel">
