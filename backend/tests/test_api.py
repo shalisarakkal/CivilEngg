@@ -119,6 +119,20 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
         summary = client.post(f"/projects/{project_id}/summaries")
         assert summary.status_code == 200
         assert "summary" in summary.json()["content"]
+
+        second_summary = client.post(f"/projects/{project_id}/summaries")
+        assert second_summary.status_code == 200
+        summaries = client.get(f"/projects/{project_id}/summaries")
+        assert summaries.status_code == 200
+        # Not asserting relative order here: SQLite's CURRENT_TIMESTAMP has only
+        # one-second resolution, so two requests this close together can get an
+        # identical created_at and tie (production Postgres has microsecond
+        # resolution and won't tie in practice).
+        assert {item["id"] for item in summaries.json()} == {
+            summary.json()["id"],
+            second_summary.json()["id"],
+        }
+
         question = client.post(
             f"/projects/{project_id}/questions",
             json={"question": "What is the setback distance?"},
@@ -235,6 +249,95 @@ def test_project_archive_restore_and_permanent_purge(
 
         with sessions() as verify_session:
             assert verify_session.get(SourceFile, uploaded["id"]) is None
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+
+def test_archive_auto_purge_retention_and_history(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        database = sessions()
+        try:
+            yield database
+        finally:
+            database.close()
+
+    monkeypatch.setenv("LOCAL_STORAGE_PATH", str(tmp_path))
+    from civil_engineering.config import get_settings
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    try:
+        # A retention window of 0 days means anything archived is
+        # immediately past it, so the next archived-list fetch sweeps it.
+        monkeypatch.setenv("ARCHIVE_RETENTION_DAYS", "0")
+        monkeypatch.setenv("ARCHIVE_PURGE_WARNING_DAYS", "15")
+        monkeypatch.setenv("PURGE_HISTORY_RETENTION_DAYS", "365")
+        get_settings.cache_clear()
+
+        project = client.post("/projects", json={"name": "Auto Purge Site"}).json()
+        project_id = project["id"]
+        assert client.post(f"/projects/{project_id}/archive").status_code == 200
+
+        archived = client.get("/admin/projects/archived").json()
+        assert archived == []  # swept before it could even be listed
+        assert client.get(f"/projects/{project_id}").status_code == 404
+
+        history = client.get("/admin/purge-history").json()
+        assert len(history) == 1
+        assert history[0]["resource_type"] == "project"
+        assert history[0]["resource_id"] == project_id
+        assert history[0]["resource_name"] == "Auto Purge Site"
+        assert history[0]["purge_reason"] == "retention_expired"
+
+        # Restore a normal (non-expired) retention so the rest of this test
+        # exercises the non-sweeping path: manual purge, and the warning flag.
+        monkeypatch.setenv("ARCHIVE_RETENTION_DAYS", "30")
+        get_settings.cache_clear()
+
+        manual_project = client.post("/projects", json={"name": "Manual Purge Site"}).json()
+        manual_id = manual_project["id"]
+        client.post(f"/projects/{manual_id}/archive")
+        still_listed = client.get("/admin/projects/archived").json()
+        assert any(item["id"] == manual_id for item in still_listed)
+        purged = client.delete(f"/admin/projects/{manual_id}")
+        assert purged.status_code == 204
+        history_after_manual = client.get("/admin/purge-history").json()
+        assert any(
+            entry["resource_id"] == manual_id and entry["purge_reason"] == "manual"
+            for entry in history_after_manual
+        )
+
+        # A warning window wider than the retention window puts a freshly
+        # archived item into its warning period immediately, while it still
+        # has time left before actually being auto-purged.
+        monkeypatch.setenv("ARCHIVE_PURGE_WARNING_DAYS", "45")
+        get_settings.cache_clear()
+        warning_project = client.post("/projects", json={"name": "Warning Site"}).json()
+        warning_id = warning_project["id"]
+        client.post(f"/projects/{warning_id}/archive")
+        listed = client.get("/admin/projects/archived").json()
+        entry = next(item for item in listed if item["id"] == warning_id)
+        assert entry["purge_warning"] is True
+        assert entry["purge_scheduled_at"]
+
+        # Purge-history entries are pruned on their own (separate) retention
+        # once it elapses.
+        monkeypatch.setenv("PURGE_HISTORY_RETENTION_DAYS", "0")
+        get_settings.cache_clear()
+        client.get("/admin/projects/archived")  # triggers the sweep again
+        assert client.get("/admin/purge-history").json() == []
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()

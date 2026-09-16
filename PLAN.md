@@ -330,13 +330,13 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Add a `GET /projects/{project_id}/summaries` endpoint listing past summaries (most recent first), matching the existing `question_answers` history pattern
-- [ ] Show generated summaries in the workspace as a history list (like the existing Q&A list) instead of a single replaceable card, each labeled with its resolved scope (whole project vs. specific revisions) and timestamp
+- [x] Add a `GET /projects/{project_id}/summaries` endpoint listing past summaries (most recent first). Turned out the existing `question_answers` "history" isn't actually a backend-persisted pattern to match: there's no `GET /questions` endpoint at all, and the frontend's question history is a session-local array that resets on reload/project switch. Summaries now do better than that baseline — real backend persistence, fetched on project load, surviving reloads and project switches — rather than reproducing the same session-only limitation.
+- [x] Show generated summaries in the workspace as a history list (like the existing Q&A list) instead of a single replaceable card, each labeled with its resolved scope (whole project vs. specific revisions) and timestamp
 
 **Exit criteria:**
 
-- [ ] Generating a new summary does not hide a previously generated one from the UI
-- [ ] Each summary in the list clearly shows which revisions it covered and when it was generated
+- [x] Generating a new summary does not hide a previously generated one from the UI
+- [x] Each summary in the list clearly shows which revisions it covered and when it was generated
 
 ### Phase 12 - Activity Events (not yet scoped)
 
@@ -349,6 +349,27 @@ Phase 6 lifecycle additions:
 - [ ] Design and implement the event model and storage
 - [ ] Implement the chosen UI, replacing or complementing the existing single-line status banner
 - [ ] Add test coverage
+
+### Phase 13 - Archive Retention and Purge History
+
+**Objective:** Prompted by a real incident: a large, real project was manually purged (correctly, deliberately, by the user) and there was no record afterward of what it had been or when it went, and no safety net for an archived item nobody ever gets around to purging or restoring. Two related but distinct mechanisms: (1) an audit trail of every purge, manual or automatic, that outlives the purged data itself; (2) archived projects and files are no longer kept indefinitely — they're automatically, permanently purged after a configurable retention window if nobody restores or manually purges them first, with a visible warning as that deadline approaches.
+
+**Work items:**
+
+- [x] Add a `purge_history` table recording every purge (manual or automatic): resource type/id/name, owning project (for files), when it was archived, why it was purged, when. No foreign keys to the purged resource, since by definition that row is gone by the time this one matters.
+- [x] Add `ARCHIVE_RETENTION_DAYS` (default 180), `ARCHIVE_PURGE_WARNING_DAYS` (default 15), and `PURGE_HISTORY_RETENTION_DAYS` (default 365) settings
+- [x] Auto-purge archived projects and files once their retention window elapses, via a lazy sweep (no scheduler/cron dependency exists in this app) run at the top of the archived-list endpoints rather than on a timer
+- [x] Prune `purge_history` rows past their own (separate, longer) retention in the same sweep
+- [x] Surface `purge_scheduled_at` and a `purge_warning` flag (true inside the warning window) on the archived-projects and archived-files list responses
+- [x] Show an auto-purge countdown on each archived row in both admin panels, visually flagged once inside the warning window
+- [x] `GET /admin/purge-history` endpoint so the log is queryable now; no browsing UI yet (deferred — capture the data first, decide what's worth showing once there's real history to look at)
+- [ ] (Optional, deferred) Compress archived files above a size threshold, decompressing on restore; compress a project's files when the project itself is archived. Not started — project-archive today never touches storage at all (only purge does), so the project-level half is a bigger change than the file-level half, and compression benefit varies a lot by file type (text/CSV/XML compress well, PDF/TIFF often don't).
+
+**Exit criteria:**
+
+- [x] Every purge, manual or automatic, is recorded with enough detail to answer "what was this and when did it go" after the fact
+- [x] An archived project or file nobody acts on is eventually purged on its own rather than kept forever
+- [x] A user can see, before it happens, that something is about to be auto-purged
 
 ### Phase Z - MVP Release and Deployment
 

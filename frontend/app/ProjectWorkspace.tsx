@@ -4,6 +4,11 @@ import { DragEvent, FormEvent, useEffect, useState } from "react";
 
 type Project = { id: string; name: string; description: string | null; default_unit_system: string };
 type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null; document_group_id: string; superseded_by_id: string | null; uploaded_at: string };
+// An archived project/file is auto-purged once purge_scheduled_at passes,
+// unless it's restored or manually purged first; purge_warning is true once
+// that's within the server's configured warning window.
+type ArchivedProject = Project & { purge_scheduled_at: string; purge_warning: boolean };
+type ArchivedSourceFile = SourceFile & { purge_scheduled_at: string; purge_warning: boolean };
 type ProcessingJob = { id: string; source_file_id: string; status: string; warnings: string[] | null };
 type Revision = { id: string; revision_number: number; created_at: string; source_job_ids: string[] | null; notes: string | null };
 type Entity = { id: string; entity_type: string; geometry: Record<string, unknown> | null; properties: Record<string, unknown> | null; validation_status: string; source_reference: Record<string, unknown> | null };
@@ -81,6 +86,14 @@ type BatchResult = { name: string; ok: boolean; detail: string; retryable?: bool
 // specific per-file detail available to show alongside the name.
 function formatFileSize(bytes: number): string {
   return `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+}
+
+function formatPurgeCountdown(purgeScheduledAt: string): string {
+  const msRemaining = new Date(purgeScheduledAt).getTime() - Date.now();
+  const daysRemaining = Math.ceil(msRemaining / (24 * 60 * 60 * 1000));
+  if (daysRemaining <= 0) return "Auto-deletes very soon";
+  if (daysRemaining === 1) return "Auto-deletes in 1 day";
+  return `Auto-deletes in ${daysRemaining} days`;
 }
 
 function summarizeBatchResult(verb: string, results: BatchResult[]): string {
@@ -192,15 +205,15 @@ export default function ProjectWorkspace() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [files, setFiles] = useState<SourceFile[]>([]);
   const [processingJobs, setProcessingJobs] = useState<ProcessingJob[]>([]);
-  const [archivedFiles, setArchivedFiles] = useState<SourceFile[]>([]);
-  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  const [archivedFiles, setArchivedFiles] = useState<ArchivedSourceFile[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
   const [apiStatus, setApiStatus] = useState<{ ok: boolean; environment?: string } | null>(null);
   const [projectPendingArchive, setProjectPendingArchive] = useState<Project | null>(null);
   const [projectPendingPurge, setProjectPendingPurge] = useState<Project | null>(null);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [calculations, setCalculations] = useState<Calculation[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
+  const [summaryHistory, setSummaryHistory] = useState<Summary[]>([]);
   const [questionText, setQuestionText] = useState("");
   const [questionHistory, setQuestionHistory] = useState<QuestionAnswerRecord[]>([]);
   const [projectName, setProjectName] = useState("");
@@ -291,11 +304,12 @@ export default function ProjectWorkspace() {
   }
 
   async function loadProjectData(project: Project) {
-    const [fileResponse, revisionResponse, calculationResponse, processingResponse] = await Promise.all([
+    const [fileResponse, revisionResponse, calculationResponse, processingResponse, summaryResponse] = await Promise.all([
       fetch(`${apiUrl}/projects/${project.id}/files`),
       fetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
       fetch(`${apiUrl}/projects/${project.id}/calculations`),
       fetch(`${apiUrl}/projects/${project.id}/processing`),
+      fetch(`${apiUrl}/projects/${project.id}/summaries`),
     ]);
     if (fileResponse.ok) setFiles(await fileResponse.json());
     const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
@@ -314,6 +328,7 @@ export default function ProjectWorkspace() {
       setAcceptedFileIds(jobs.filter((job) => acceptedJobIds.has(job.id)).map((job) => job.source_file_id));
     }
     if (calculationResponse.ok) setCalculations(await calculationResponse.json());
+    if (summaryResponse.ok) setSummaryHistory(await summaryResponse.json());
   }
 
   async function loadArchivedFiles() {
@@ -353,7 +368,7 @@ export default function ProjectWorkspace() {
           setRevisions([]);
           setEntities([]);
           setCalculations([]);
-          setSummary(null);
+          setSummaryHistory([]);
           setQuestionHistory([]);
         }
       }
@@ -415,7 +430,7 @@ export default function ProjectWorkspace() {
   async function selectProject(project: Project) {
     setSelectedProject(project);
     setEntities([]);
-    setSummary(null);
+    setSummaryHistory([]);
     setQuestionHistory([]);
     setSelectedFileIds(new Set());
     await loadProjectData(project);
@@ -1033,7 +1048,8 @@ export default function ProjectWorkspace() {
       const query = params.toString() ? `?${params.toString()}` : "";
       const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/summaries${query}`, { method: "POST" });
       if (response.ok) {
-        setSummary(await response.json());
+        const created: Summary = await response.json();
+        setSummaryHistory((current) => [created, ...current]);
         setMessage("Site summary generated.");
       } else {
         const error = await response.json().catch(() => ({}));
@@ -1102,30 +1118,7 @@ export default function ProjectWorkspace() {
       if (data.length > 0) {
         const project = data[0];
         setSelectedProject(project);
-        const [fileResponse, revisionResponse, calculationResponse, processingResponse] = await Promise.all([
-          fetch(`${apiUrl}/projects/${project.id}/files`),
-          fetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
-          fetch(`${apiUrl}/projects/${project.id}/calculations`),
-          fetch(`${apiUrl}/projects/${project.id}/processing`),
-        ]);
-        if (fileResponse.ok) setFiles(await fileResponse.json());
-        const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
-        setProcessingJobs(jobs);
-        if (revisionResponse.ok) {
-          const revisionData: Revision[] = await revisionResponse.json();
-          setRevisions(revisionData);
-          if (revisionData[0]) setSelectedRevisionId(revisionData[0].id);
-          else setSelectedRevisionId(null);
-          const acceptedJobIds = new Set(revisionData.flatMap((revision) => revision.source_job_ids ?? []));
-          setAcceptedFileIds(jobs.filter((job) => acceptedJobIds.has(job.id)).map((job) => job.source_file_id));
-          if (revisionData[0]) {
-            const entityResponse = await fetch(
-              `${apiUrl}/projects/${project.id}/site-model/revisions/${revisionData[0].id}/entities?limit=500`,
-            );
-            if (entityResponse.ok) setEntities(await entityResponse.json());
-          } else setEntities([]);
-        }
-        if (calculationResponse.ok) setCalculations(await calculationResponse.json());
+        await loadProjectData(project);
       }
     }
 
@@ -1152,6 +1145,10 @@ export default function ProjectWorkspace() {
     }
 
     void loadInitialData();
+    // Intentionally mount-only: loadProjectData is a plain function
+    // recreated every render, so adding it here would re-run this on every
+    // state update it triggers instead of once on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -1189,8 +1186,8 @@ export default function ProjectWorkspace() {
             {projects.length === 0 && <p className="muted">No projects yet.</p>}
             {projects.map((project) => <button className={`project-item ${selectedProject?.id === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectProject(project)}><span>{project.name}</span><small>{project.default_unit_system}</small></button>)}
           </div>
-          <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.length > 0 && <div className="archive-controls"><label className="select-all"><input type="checkbox" checked={archivedFiles.length > 0 && archivedFiles.every((file) => selectedArchivedFileIds.has(file.id))} onChange={toggleSelectAllArchivedFiles} disabled={batchBusy !== null} /><span>Select all</span></label>{selectedArchivedFileIds.size > 0 && <div className="batch-toolbar-mini"><button disabled={batchBusy !== null} onClick={() => void restoreSelectedArchivedFiles()}>{batchBusy === "restore" ? "Restoring..." : `Restore (${selectedArchivedFileIds.size})`}</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id)))}>{`Purge (${selectedArchivedFileIds.size})`}</button></div>}</div>}{archivedFiles.map((file) => <div className="archive-row" key={file.id}><div className="archive-row-top"><input type="checkbox" checked={selectedArchivedFileIds.has(file.id)} onChange={() => toggleArchivedFileSelection(file.id)} disabled={batchBusy !== null} /><strong>{file.original_name}</strong></div><div><button disabled={busyAction === `restore:${file.id}` || batchBusy !== null} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}` || batchBusy !== null} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
-          <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
+          <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.length > 0 && <div className="archive-controls"><label className="select-all"><input type="checkbox" checked={archivedFiles.length > 0 && archivedFiles.every((file) => selectedArchivedFileIds.has(file.id))} onChange={toggleSelectAllArchivedFiles} disabled={batchBusy !== null} /><span>Select all</span></label>{selectedArchivedFileIds.size > 0 && <div className="batch-toolbar-mini"><button disabled={batchBusy !== null} onClick={() => void restoreSelectedArchivedFiles()}>{batchBusy === "restore" ? "Restoring..." : `Restore (${selectedArchivedFileIds.size})`}</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id)))}>{`Purge (${selectedArchivedFileIds.size})`}</button></div>}</div>}{archivedFiles.map((file) => <div className="archive-row" key={file.id}><div className="archive-row-top"><input type="checkbox" checked={selectedArchivedFileIds.has(file.id)} onChange={() => toggleArchivedFileSelection(file.id)} disabled={batchBusy !== null} /><strong>{file.original_name}</strong></div><small className={file.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(file.purge_scheduled_at)}</small><div><button disabled={busyAction === `restore:${file.id}` || batchBusy !== null} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}` || batchBusy !== null} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
+          <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><small className={project.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(project.purge_scheduled_at)}</small><div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
@@ -1216,7 +1213,7 @@ export default function ProjectWorkspace() {
             </div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}<span className="result-inputs">{formatCalculationInputs(calculation.inputs)}</span></small></button>)}</div>}</section>
-            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site intelligence</p><h3>Summarize and ask questions.</h3><p className="calculation-help">Answers are grounded in the accepted site model and calculations. AI-generated content is clearly labeled and never invents a measurement.</p></div><button type="button" className="secondary-button" disabled={loading || revisions.length === 0} onClick={() => void requestSummary()}>Request site summary</button></div>{revisions.length > 0 && <div className="qa-scope"><p className="eyebrow">Scope</p><p className="muted">{qaRevisionIds.length === 0 ? "Whole project (every accepted document's latest revision)." : "Selected revisions only."}</p><div className="qa-scope-options">{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <label key={revision.id} className="qa-scope-option"><input type="checkbox" checked={qaRevisionIds.includes(revision.id)} onChange={() => toggleQaRevision(revision.id)} /><span>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"}</span></label>; })}</div></div>}{summary && <div className="summary-card"><p>{summary.content.summary}</p><dl><div><dt>Grading</dt><dd>{summary.content.grading}</dd></div><div><dt>Drainage</dt><dd>{summary.content.drainage}</dd></div><div><dt>Utilities</dt><dd>{summary.content.utilities}</dd></div></dl>{summary.content.attention_flags.length > 0 && <div className="attention-flags"><strong>Attention</strong><ul>{summary.content.attention_flags.map((flag, index) => <li key={index}>{flag}</li>)}</ul></div>}<p className="ai-label">AI-generated · scope: {qaScopeLabel(summary.revision_ids)} · {summary.content.limitations.join(" ")}</p></div>}<form className="question-form" onSubmit={askQuestion}><label>Ask a question<input value={questionText} onChange={(event) => setQuestionText(event.target.value)} placeholder="What is the setback distance?" maxLength={2000} /></label><button type="submit" className="secondary-button" disabled={loading || !questionText.trim()}>Ask</button></form>{questionHistory.length > 0 && <div className="qa-list">{questionHistory.map((record) => <div className="qa-card" key={record.id}><p className="qa-question">{record.question}</p><p className="qa-answer">{record.answer.answer}</p><small className="ai-label">AI-generated · {record.answer.method} · confidence {record.answer.confidence.toFixed(2)} · scope: {qaScopeLabel(record.revision_ids)}</small>{record.answer.limitations && record.answer.limitations.length > 0 && <small className="qa-limitations">{record.answer.limitations.join(" ")}</small>}</div>)}</div>}</section>
+            <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site intelligence</p><h3>Summarize and ask questions.</h3><p className="calculation-help">Answers are grounded in the accepted site model and calculations. AI-generated content is clearly labeled and never invents a measurement.</p></div><button type="button" className="secondary-button" disabled={loading || revisions.length === 0} onClick={() => void requestSummary()}>Request site summary</button></div>{revisions.length > 0 && <div className="qa-scope"><p className="eyebrow">Scope</p><p className="muted">{qaRevisionIds.length === 0 ? "Whole project (every accepted document's latest revision)." : "Selected revisions only."}</p><div className="qa-scope-options">{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <label key={revision.id} className="qa-scope-option"><input type="checkbox" checked={qaRevisionIds.includes(revision.id)} onChange={() => toggleQaRevision(revision.id)} /><span>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"}</span></label>; })}</div></div>}{summaryHistory.length > 0 && <div className="summary-list">{summaryHistory.map((item) => <div className="summary-card" key={item.id}><p>{item.content.summary}</p><dl><div><dt>Grading</dt><dd>{item.content.grading}</dd></div><div><dt>Drainage</dt><dd>{item.content.drainage}</dd></div><div><dt>Utilities</dt><dd>{item.content.utilities}</dd></div></dl>{item.content.attention_flags.length > 0 && <div className="attention-flags"><strong>Attention</strong><ul>{item.content.attention_flags.map((flag, index) => <li key={index}>{flag}</li>)}</ul></div>}<p className="ai-label">AI-generated · {new Date(item.created_at).toLocaleString()} · scope: {qaScopeLabel(item.revision_ids)} · {item.content.limitations.join(" ")}</p></div>)}</div>}<form className="question-form" onSubmit={askQuestion}><label>Ask a question<input value={questionText} onChange={(event) => setQuestionText(event.target.value)} placeholder="What is the setback distance?" maxLength={2000} /></label><button type="submit" className="secondary-button" disabled={loading || !questionText.trim()}>Ask</button></form>{questionHistory.length > 0 && <div className="qa-list">{questionHistory.map((record) => <div className="qa-card" key={record.id}><p className="qa-question">{record.question}</p><p className="qa-answer">{record.answer.answer}</p><small className="ai-label">AI-generated · {record.answer.method} · confidence {record.answer.confidence.toFixed(2)} · scope: {qaScopeLabel(record.revision_ids)}</small>{record.answer.limitations && record.answer.limitations.length > 0 && <small className="qa-limitations">{record.answer.limitations.join(" ")}</small>}</div>)}</div>}</section>
             {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
             {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
             {filesPendingBatchDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-delete-title"><p className="eyebrow">Archive files</p><h3 id="batch-delete-title">Archive {filesPendingBatchDelete.length} file{filesPendingBatchDelete.length === 1 ? "" : "s"}?</h3><p className="muted">{filesPendingBatchDelete.map((file) => file.original_name).join(", ")}</p><p className="muted">Each file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchDeleteFiles()}>{batchBusy === "archive" ? "Archiving..." : "Archive files"}</button></div></section></div>}

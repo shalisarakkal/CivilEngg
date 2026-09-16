@@ -232,3 +232,25 @@ class QuestionAnswer(Base):
     intent: Mapped[str] = mapped_column(String(32), nullable=False)
     answer: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PurgeHistoryEntry(Base):
+    """A permanent tombstone recording that a project or file was purged.
+
+    Deliberately has no foreign keys to `projects`/`source_files`: by the
+    time this matters, those rows are gone. This table survives them, and is
+    itself pruned on its own (longer) retention schedule.
+    """
+
+    __tablename__ = "purge_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    resource_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    resource_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # The owning project for a purged file; null for a purged project (its
+    # own id is already resource_id).
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    purged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

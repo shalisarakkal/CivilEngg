@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +18,7 @@ from civil_engineering.calculations import (
     calculate_perimeter,
     calculate_slope,
 )
+from civil_engineering.config import get_settings
 from civil_engineering.database import get_db
 from civil_engineering.extraction import ExtractionError, parse_file
 from civil_engineering.models import (
@@ -28,6 +29,7 @@ from civil_engineering.models import (
     Project,
     ProjectRevision,
     ProjectSummary,
+    PurgeHistoryEntry,
     QuestionAnswer,
     SiteModelEntity,
     SourceFile,
@@ -35,6 +37,8 @@ from civil_engineering.models import (
 )
 from civil_engineering.plan_snippets import PlanSnippetError, render_dxf_snippet
 from civil_engineering.schemas import (
+    ArchivedProjectResponse,
+    ArchivedSourceFileResponse,
     CalculationRequest,
     CalculationResponse,
     ClientCreate,
@@ -45,6 +49,7 @@ from civil_engineering.schemas import (
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
+    PurgeHistoryEntryResponse,
     QuestionRequest,
     QuestionResponse,
     SiteModelEntityResponse,
@@ -77,6 +82,100 @@ def get_project_or_404(project_id: str, database: Session) -> Project:
     if project is None or project.archived_at is not None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+
+def _as_utc(value: datetime) -> datetime:
+    # SQLite (used by the test suite) can hand back a naive datetime for a
+    # DateTime(timezone=True) column even though it was written as UTC-aware;
+    # Postgres never does. Normalizing here keeps the arithmetic below correct
+    # under either backend instead of raising on a naive/aware comparison.
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _log_purge(
+    database: Session,
+    *,
+    resource_type: str,
+    resource_id: str,
+    resource_name: str,
+    project_id: str | None,
+    archived_at: datetime | None,
+    reason: str,
+) -> None:
+    database.add(
+        PurgeHistoryEntry(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            project_id=project_id,
+            archived_at=archived_at,
+            purge_reason=reason,
+        )
+    )
+
+
+def _purge_project(database: Session, project: Project, *, reason: str) -> None:
+    _log_purge(
+        database,
+        resource_type="project",
+        resource_id=project.id,
+        resource_name=project.name,
+        project_id=None,
+        archived_at=project.archived_at,
+        reason=reason,
+    )
+    remove_project_storage(project.id)
+    # See the comment on the original bulk-delete below for why this bypasses
+    # the ORM object graph.
+    database.execute(delete(Project).where(Project.id == project.id))
+
+
+def _purge_file(database: Session, source_file: SourceFile, *, reason: str) -> None:
+    _log_purge(
+        database,
+        resource_type="file",
+        resource_id=source_file.id,
+        resource_name=source_file.original_name,
+        project_id=source_file.project_id,
+        archived_at=source_file.deleted_at,
+        reason=reason,
+    )
+    remove_file(source_file.archived_path or source_file.stored_path)
+    database.delete(source_file)
+
+
+def _sweep_expired_archives(database: Session) -> None:
+    """Auto-purges anything left archived past the configured retention
+    window, and prunes purge-history entries past their own (separate,
+    longer) retention window. Called lazily from the archived-list endpoints
+    rather than on a schedule, since nothing else in this app runs on one."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    retention_cutoff = now - timedelta(days=settings.archive_retention_days)
+    history_cutoff = now - timedelta(days=settings.purge_history_retention_days)
+
+    expired_projects = list(
+        database.scalars(
+            select(Project).where(
+                Project.archived_at.is_not(None), Project.archived_at < retention_cutoff
+            )
+        )
+    )
+    for project in expired_projects:
+        _purge_project(database, project, reason="retention_expired")
+
+    expired_files = list(
+        database.scalars(
+            select(SourceFile).where(
+                SourceFile.deleted_at.is_not(None), SourceFile.deleted_at < retention_cutoff
+            )
+        )
+    )
+    for source_file in expired_files:
+        _purge_file(database, source_file, reason="retention_expired")
+
+    database.execute(delete(PurgeHistoryEntry).where(PurgeHistoryEntry.purged_at < history_cutoff))
+    database.commit()
 
 
 @router.post("/clients", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
@@ -166,15 +265,28 @@ def archive_project(project_id: str, database: Session = Depends(get_db)) -> Pro
     return project
 
 
-@router.get("/admin/projects/archived", response_model=list[ProjectResponse])
-def list_archived_projects(database: Session = Depends(get_db)) -> list[Project]:
-    return list(
-        database.scalars(
-            select(Project)
-            .where(Project.archived_at.is_not(None))
-            .order_by(Project.archived_at.desc())
-        )
+@router.get("/admin/projects/archived", response_model=list[ArchivedProjectResponse])
+def list_archived_projects(database: Session = Depends(get_db)) -> list[ArchivedProjectResponse]:
+    _sweep_expired_archives(database)
+    settings = get_settings()
+    retention = timedelta(days=settings.archive_retention_days)
+    warning_window = timedelta(days=settings.archive_purge_warning_days)
+    now = datetime.now(timezone.utc)
+    projects = database.scalars(
+        select(Project).where(Project.archived_at.is_not(None)).order_by(Project.archived_at.desc())
     )
+    responses = []
+    for project in projects:
+        archived_at = _as_utc(cast(datetime, project.archived_at))
+        scheduled = archived_at + retention
+        responses.append(
+            ArchivedProjectResponse(
+                **ProjectResponse.model_validate(project).model_dump(),
+                purge_scheduled_at=scheduled,
+                purge_warning=now >= scheduled - warning_window,
+            )
+        )
+    return responses
 
 
 @router.post("/admin/projects/{project_id}/restore", response_model=ProjectResponse)
@@ -193,13 +305,12 @@ def purge_archived_project(project_id: str, database: Session = Depends(get_db))
     project = database.get(Project, project_id)
     if project is None or project.archived_at is None:
         raise HTTPException(status_code=404, detail="Archived project not found")
-    remove_project_storage(project.id)
-    # A single statement relying on the schema's ON DELETE CASCADE foreign
-    # keys to remove every dependent row server-side. Loading the object
-    # graph through the ORM instead (database.delete(project)) issues one
-    # DELETE per row, which is impractically slow once a project's site
-    # model has hundreds of thousands of entities.
-    database.execute(delete(Project).where(Project.id == project.id))
+    # _purge_project relies on the schema's ON DELETE CASCADE foreign keys to
+    # remove every dependent row server-side via a single bulk DELETE.
+    # Loading the object graph through the ORM instead (database.delete)
+    # issues one DELETE per row, which is impractically slow once a
+    # project's site model has hundreds of thousands of entities.
+    _purge_project(database, project, reason="manual")
     database.commit()
 
 
@@ -440,15 +551,28 @@ def list_processing_jobs(
     return list(database.scalars(statement))
 
 
-@router.get("/admin/files/archived", response_model=list[SourceFileResponse])
-def list_archived_files(database: Session = Depends(get_db)) -> list[SourceFile]:
-    return list(
-        database.scalars(
-            select(SourceFile)
-            .where(SourceFile.deleted_at.is_not(None))
-            .order_by(SourceFile.deleted_at.desc())
-        )
+@router.get("/admin/files/archived", response_model=list[ArchivedSourceFileResponse])
+def list_archived_files(database: Session = Depends(get_db)) -> list[ArchivedSourceFileResponse]:
+    _sweep_expired_archives(database)
+    settings = get_settings()
+    retention = timedelta(days=settings.archive_retention_days)
+    warning_window = timedelta(days=settings.archive_purge_warning_days)
+    now = datetime.now(timezone.utc)
+    files = database.scalars(
+        select(SourceFile).where(SourceFile.deleted_at.is_not(None)).order_by(SourceFile.deleted_at.desc())
     )
+    responses = []
+    for source_file in files:
+        deleted_at = _as_utc(cast(datetime, source_file.deleted_at))
+        scheduled = deleted_at + retention
+        responses.append(
+            ArchivedSourceFileResponse(
+                **SourceFileResponse.model_validate(source_file).model_dump(),
+                purge_scheduled_at=scheduled,
+                purge_warning=now >= scheduled - warning_window,
+            )
+        )
+    return responses
 
 
 @router.post("/admin/files/{file_id}/restore", response_model=SourceFileResponse)
@@ -478,9 +602,15 @@ def purge_archived_file(file_id: str, database: Session = Depends(get_db)) -> No
     source_file = database.get(SourceFile, file_id)
     if source_file is None or source_file.deleted_at is None:
         raise HTTPException(status_code=404, detail="Archived file not found")
-    remove_file(source_file.archived_path or source_file.stored_path)
-    database.delete(source_file)
+    _purge_file(database, source_file, reason="manual")
     database.commit()
+
+
+@router.get("/admin/purge-history", response_model=list[PurgeHistoryEntryResponse])
+def list_purge_history(database: Session = Depends(get_db)) -> list[PurgeHistoryEntry]:
+    return list(
+        database.scalars(select(PurgeHistoryEntry).order_by(PurgeHistoryEntry.purged_at.desc()))
+    )
 
 
 @router.get("/projects/{project_id}/processing/{job_id}", response_model=ProcessingJobResponse)
@@ -1075,6 +1205,18 @@ def create_summary(
     database.commit()
     database.refresh(summary)
     return summary
+
+
+@router.get("/projects/{project_id}/summaries", response_model=list[SummaryResponse])
+def list_summaries(project_id: str, database: Session = Depends(get_db)) -> list[ProjectSummary]:
+    get_project_or_404(project_id, database)
+    return list(
+        database.scalars(
+            select(ProjectSummary)
+            .where(ProjectSummary.project_id == project_id)
+            .order_by(ProjectSummary.created_at.desc())
+        )
+    )
 
 
 @router.post("/projects/{project_id}/questions", response_model=QuestionResponse)

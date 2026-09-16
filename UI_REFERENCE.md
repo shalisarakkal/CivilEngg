@@ -28,15 +28,19 @@ Archiving a project (see "Archive project" below) is the only way to remove it f
 Shows a running count ("N archived files") and, underneath, a "Select all" checkbox plus one row per archived file across all projects (not just the active one), each with:
 
 - **A checkbox** — selecting one or more files reveals a small "Restore (N)" / "Purge (N)" toolbar next to "Select all" that applies to every selected file at once, in addition to the per-row buttons below.
-- **Restore** — brings the file back to its project's normal file list, in whatever status it had when archived.
+- **An auto-purge countdown** ("Auto-deletes in N days") — an archived file isn't kept forever: it's automatically, permanently purged once it's been archived for the server's configured retention period (180 days by default) if nobody restores or manually purges it first. The countdown turns into a visibly flagged warning style once it's within the server's warning window (15 days by default) of that date.
+- **Restore** — brings the file back to its project's normal file list, in whatever status it had when archived. Also cancels the auto-purge countdown, naturally, since it's no longer archived.
 - **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the file's database record and on-disk copy. Accepted revisions and calculations that already exist stay intact; only the original source file becomes unrecoverable.
 
 The batch "Purge (N)" button opens the same style of confirmation dialog, listing every selected file by name. Either way, if one file in the batch fails (e.g. it was already restored elsewhere a moment ago), the status banner reports exactly which one and why, and the rest still complete.
+
+Every purge — this one, the single-file one above, or the automatic one that runs once the countdown expires — is recorded permanently in a server-side history log (not currently browsable from this screen).
 
 ### Archived projects
 
 The same pattern as Archived files, one level up: a running count ("N archived projects") and one row per archived project across the whole app, each with:
 
+- **An auto-purge countdown**, identical in behavior to the one on archived files.
 - **Restore** — brings the project back to the Project list above, fully intact (files, revisions, calculations, summaries, and questions were never touched by archiving).
 - **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the project's database rows (cascading to everything under it — files, jobs, revisions, entities, calculations, summaries, questions) and its on-disk storage folder. This cannot be undone. A non-archived project can't be purged directly — it has to be archived first.
 

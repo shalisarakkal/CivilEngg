@@ -69,6 +69,32 @@ class SourceFileResponse(BaseModel):
     superseded_by_id: str | None
 
 
+class ArchivedProjectResponse(ProjectResponse):
+    # When this project will be automatically, permanently purged if nobody
+    # restores or manually purges it first.
+    purge_scheduled_at: datetime
+    # True once purge_scheduled_at is within the configured warning window.
+    purge_warning: bool
+
+
+class ArchivedSourceFileResponse(SourceFileResponse):
+    purge_scheduled_at: datetime
+    purge_warning: bool
+
+
+class PurgeHistoryEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    resource_type: str
+    resource_id: str
+    resource_name: str
+    project_id: str | None
+    archived_at: datetime | None
+    purge_reason: str
+    purged_at: datetime
+
+
 class ProcessingJobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

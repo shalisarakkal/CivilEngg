@@ -517,6 +517,50 @@ test.describe("project workspace", () => {
     await expect(page.getByText("4.000 percent")).toBeVisible();
   });
 
+  test("site intelligence: generating multiple summaries keeps a history instead of replacing", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) =>
+      json(route, [{ id: "rev-1", revision_number: 1, created_at: "2026-01-01T00:00:00Z", source_job_ids: ["job-1"], notes: null }]),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/rev-1/entities*`, (route) => json(route, []));
+    let callCount = 0;
+    await page.route(`${API}/projects/${PROJECT.id}/summaries`, async (route) => {
+      if (route.request().method() === "GET") return json(route, []);
+      callCount += 1;
+      return json(route, {
+        id: `summary-${callCount}`,
+        project_id: PROJECT.id,
+        revision_ids: null,
+        content: {
+          summary: `Summary number ${callCount}.`,
+          grading: "Flat site.",
+          drainage: "No issues noted.",
+          utilities: "None mapped.",
+          attention_flags: [],
+          limitations: ["Deterministic summary; not a substitute for a licensed review."],
+        },
+        created_at: `2026-01-0${callCount}T00:00:00Z`,
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.getByRole("button", { name: "Request site summary" }).click();
+    await expect(page.getByText("Summary number 1.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Request site summary" }).click();
+    await expect(page.getByText("Summary number 2.")).toBeVisible();
+    // The first summary must still be visible -- not replaced by the second.
+    await expect(page.getByText("Summary number 1.")).toBeVisible();
+
+    const cards = page.locator(".summary-card");
+    await expect(cards).toHaveCount(2);
+    // Most recent first.
+    await expect(cards.nth(0)).toContainText("Summary number 2.");
+    await expect(cards.nth(1)).toContainText("Summary number 1.");
+  });
+
   test("error state: a failed project creation shows a message and re-enables the form", async ({ page }) => {
     await mockBaseline(page, []);
     await page.route(`${API}/projects`, async (route) => {
@@ -638,7 +682,9 @@ test.describe("project workspace", () => {
     await mockBaseline(page, [PROJECT]);
     await page.route(`${API}/admin/projects/archived`, (route) => json(route, archivedProjects));
     await page.route(`${API}/projects/${PROJECT.id}/archive`, (route) => {
-      archivedProjects = [{ ...PROJECT, archived_at: "2026-01-01T00:00:00Z" }];
+      archivedProjects = [
+        { ...PROJECT, archived_at: "2026-01-01T00:00:00Z", purge_scheduled_at: "2026-07-01T00:00:00Z", purge_warning: false },
+      ];
       return json(route, { ...PROJECT, archived_at: "2026-01-01T00:00:00Z" });
     });
     await page.route(`${API}/admin/projects/${PROJECT.id}/restore`, (route) => {
@@ -684,5 +730,55 @@ test.describe("project workspace", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Permanently delete" }).click();
     await expect(page.getByText(`${PROJECT.name} was permanently deleted.`)).toBeVisible();
     await expect(page.getByText("0 archived projects")).toBeVisible();
+  });
+
+  test("archived panels show an auto-purge countdown, flagged once within the warning window", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/admin/projects/archived`, (route) =>
+      json(route, [
+        {
+          ...PROJECT,
+          name: "Plenty Of Time Site",
+          id: "aaaaaaaa-1111-1111-1111-111111111111",
+          archived_at: "2026-01-01T00:00:00Z",
+          purge_scheduled_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          purge_warning: false,
+        },
+      ]),
+    );
+    await page.route(`${API}/admin/files/archived`, (route) =>
+      json(route, [
+        {
+          id: "file-1",
+          project_id: PROJECT.id,
+          original_name: "almost-gone.csv",
+          media_type: "text/csv",
+          size_bytes: 20,
+          checksum: "a".repeat(64),
+          status: "completed",
+          uploaded_at: "2026-01-01T00:00:00Z",
+          processed_at: null,
+          error_message: null,
+          deleted_at: "2026-01-01T00:00:00Z",
+          document_group_id: "file-1",
+          superseded_by_id: null,
+          purge_scheduled_at: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+          purge_warning: true,
+        },
+      ]),
+    );
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    // Plenty of time left: shown, but not flagged as a warning.
+    const projectRow = page.locator(".archive-row", { hasText: "Plenty Of Time Site" });
+    await expect(projectRow).toContainText("Auto-deletes in 90 days");
+    await expect(projectRow.locator(".purge-countdown-warning")).toHaveCount(0);
+
+    // Within the warning window: same countdown style, flagged.
+    const fileRow = page.locator(".archive-row", { hasText: "almost-gone.csv" });
+    await expect(fileRow).toContainText("Auto-deletes in 5 days");
+    await expect(fileRow.locator(".purge-countdown-warning")).toHaveCount(1);
   });
 });
