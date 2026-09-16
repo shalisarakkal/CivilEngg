@@ -47,7 +47,7 @@ h3 { font-size: 28px; font-weight: 400; margin: 42px 0 12px; }
 .input-row { display: flex; gap: 6px; }
 .input-row input { background: var(--panel); border: 1px solid var(--line); color: var(--ink); font: 15px Georgia, "Times New Roman", serif; min-width: 0; padding: 12px; width: 100%; }
 button { cursor: pointer; }
-.input-row button, .upload-form > button { background: var(--purple); border: 0; color: white; font: 700 13px Arial, sans-serif; padding: 0 16px; }
+.input-row button, .upload-form-actions > button:not(.secondary-button) { background: var(--purple); border: 0; color: white; font: 700 13px Arial, sans-serif; padding: 0 16px; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 .project-list { border-top: 1px solid var(--line); margin-top: 28px; }
 .admin-panel { border-top: 1px solid var(--line); margin-top: 28px; padding-top: 22px; }
@@ -75,7 +75,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .upload-form { align-items: flex-end; display: flex; flex-direction: column; gap: 10px; min-width: 250px; }
 .file-picker { border: 1px dashed var(--line); color: var(--muted); cursor: pointer; font: 12px Arial, sans-serif; overflow: hidden; padding: 14px; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
 .file-picker input { display: none; }
-.upload-form > button { padding: 12px 16px; }
+.upload-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.upload-form-actions > button:not(.secondary-button) { padding: 12px 16px; }
 .file-list { margin-top: 42px; }
 .list-heading { border-bottom: 2px solid var(--ink); display: flex; font: 700 11px Arial, sans-serif; justify-content: space-between; letter-spacing: .08em; padding-bottom: 10px; text-transform: uppercase; }
 .list-heading .select-all { align-items: center; display: flex; gap: 10px; }

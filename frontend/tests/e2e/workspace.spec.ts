@@ -92,6 +92,37 @@ test.describe("project workspace", () => {
     await expect(page.locator(".file-status").getByText("Ready to process")).toBeVisible();
   });
 
+  test("upload state: canceling a staged selection clears it without uploading", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    let postCount = 0;
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "POST") {
+        postCount += 1;
+        return route.abort("failed");
+      }
+      return json(route, []);
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "survey.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("x,y\n0,0\n"),
+    });
+    await expect(page.getByText("survey.csv selected for upload.")).toBeVisible();
+    await expect(page.getByText("1 file selected")).toBeVisible();
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    await expect(page.getByText("1 file cleared. Nothing was uploaded.")).toBeVisible();
+    await expect(page.getByText("Choose source file(s)")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Upload file" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+    expect(postCount).toBe(0);
+  });
+
   test("upload state: selecting multiple files uploads all of them and reports the count", async ({ page }) => {
     await mockBaseline(page, [PROJECT]);
     const uploaded: string[] = [];
