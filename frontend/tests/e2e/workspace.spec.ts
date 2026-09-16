@@ -152,7 +152,7 @@ test.describe("project workspace", () => {
     await expect(page.getByText("survey-2.csv")).toBeVisible();
   });
 
-  test("upload state: dropping a mix of supported and unsupported files reports one summary with details", async ({ page }) => {
+  test("upload state: dropping a mix of supported and unsupported files stages the supported one with a details breakdown", async ({ page }) => {
     await mockBaseline(page, [PROJECT]);
     await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
       if (route.request().method() === "POST") {
@@ -210,10 +210,15 @@ test.describe("project workspace", () => {
       panel.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
     });
 
-    await expect(page.getByText("1 of 2 file(s) uploaded and queued for processing, 1 failed.")).toBeVisible();
+    // Dropping only stages the supported file; nothing is uploaded yet.
+    await expect(page.getByText("1 file(s) selected for upload, 1 rejected (unsupported type).")).toBeVisible();
+    await expect(page.getByText("1 file selected")).toBeVisible();
     await page.getByRole("button", { name: "Show details" }).click();
-    await expect(page.locator(".batch-details-group", { hasText: "Successful" })).toContainText("good.csv");
-    await expect(page.locator(".batch-details-group", { hasText: "Failed — not supported" })).toContainText("bad.exe — Unsupported file type");
+    await expect(page.locator(".batch-details-group", { hasText: "Selected for upload" })).toContainText("good.csv");
+    await expect(page.locator(".batch-details-group", { hasText: "Not supported" })).toContainText(/bad\.exe.*Unsupported file type/);
+
+    await page.getByRole("button", { name: "Upload file" }).click();
+    await expect(page.getByText("good.csv uploaded and queued for processing.")).toBeVisible();
   });
 
   test("batch actions: selecting files in the list shows a batch toolbar that archives them together", async ({ page }) => {

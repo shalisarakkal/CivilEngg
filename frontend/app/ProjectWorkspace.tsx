@@ -74,7 +74,14 @@ function fileTypeGroup(name: string): string {
   return extension === "tiff" ? "tif" : extension;
 }
 
-type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected" };
+type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number };
+
+// Browsers deliberately never expose a selected/dropped file's filesystem
+// path (only its name) as a privacy/security measure, so this is the most
+// specific per-file detail available to show alongside the name.
+function formatFileSize(bytes: number): string {
+  return `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+}
 
 function summarizeBatchResult(verb: string, results: BatchResult[]): string {
   if (results.length === 1) {
@@ -88,19 +95,29 @@ function summarizeBatchResult(verb: string, results: BatchResult[]): string {
   return `${succeeded} of ${results.length} file(s) ${verb}, ${failed} failed.`;
 }
 
-const BATCH_DETAIL_GROUP_ORDER = ["Successful", "Failed — duplicate file", "Failed — not supported", "Failed"] as const;
-
-function batchResultGroup(result: BatchResult): (typeof BATCH_DETAIL_GROUP_ORDER)[number] {
-  if (result.ok) return "Successful";
-  if (result.reason === "duplicate") return "Failed — duplicate file";
-  if (result.reason === "rejected") return "Failed — not supported";
-  return "Failed";
+// Selecting files (via the picker or a drop) is not itself an upload attempt,
+// so it gets its own wording rather than reusing summarizeBatchResult's
+// "succeeded/failed" language.
+function summarizeSelection(results: BatchResult[]): string {
+  if (results.length === 1) {
+    const [only] = results;
+    return only.ok ? `${only.name} selected for upload.` : `${only.name} rejected (unsupported type).`;
+  }
+  const selected = results.filter((result) => result.ok).length;
+  const rejected = results.length - selected;
+  if (rejected === 0) return `${selected} file(s) selected for upload.`;
+  if (selected === 0) return `All ${rejected} file(s) rejected (unsupported type).`;
+  return `${selected} file(s) selected for upload, ${rejected} rejected (unsupported type).`;
 }
 
-function groupBatchResults(results: BatchResult[]): { label: string; items: BatchResult[] }[] {
-  return BATCH_DETAIL_GROUP_ORDER.map((label) => ({ label, items: results.filter((result) => batchResultGroup(result) === label) })).filter(
-    (group) => group.items.length > 0,
-  );
+function groupBatchResults(results: BatchResult[], successLabel: string): { label: string; items: BatchResult[] }[] {
+  const groups: { label: string; items: BatchResult[] }[] = [
+    { label: successLabel, items: results.filter((result) => result.ok) },
+    { label: "Duplicate file", items: results.filter((result) => !result.ok && result.reason === "duplicate") },
+    { label: "Not supported", items: results.filter((result) => !result.ok && result.reason === "rejected") },
+    { label: "Failed", items: results.filter((result) => !result.ok && !result.reason) },
+  ];
+  return groups.filter((group) => group.items.length > 0);
 }
 
 function formatCalculationInputs(inputs: Record<string, unknown>): string {
@@ -196,11 +213,13 @@ export default function ProjectWorkspace() {
   const [secondGeometry, setSecondGeometry] = useState('{"type":"Point","coordinates":[3,4]}');
   const [message, setMessageText] = useState("Ready for your first project.");
   const [messageDetails, setMessageDetails] = useState<BatchResult[] | null>(null);
+  const [messageSuccessLabel, setMessageSuccessLabel] = useState("Successful");
   const [showMessageDetails, setShowMessageDetails] = useState(false);
 
-  function setMessage(text: string, details: BatchResult[] | null = null) {
+  function setMessage(text: string, details: BatchResult[] | null = null, successLabel = "Successful") {
     setMessageText(text);
     setMessageDetails(details);
+    setMessageSuccessLabel(successLabel);
     setShowMessageDetails(false);
   }
   const [loading, setLoading] = useState(false);
@@ -534,6 +553,19 @@ export default function ProjectWorkspace() {
     }
   }
 
+  // Stages files for upload (replacing whatever was previously staged) rather
+  // than uploading them immediately, so the picker and drag-and-drop behave
+  // the same way: select/drop, review, then click "Upload file(s)".
+  function stageFiles(accepted: File[], rejected: File[] = []) {
+    setPendingFiles(accepted);
+    const results: BatchResult[] = [
+      ...accepted.map((file): BatchResult => ({ name: file.name, ok: true, detail: "", size: file.size })),
+      ...rejected.map((file): BatchResult => ({ name: file.name, ok: false, detail: "Unsupported file type", reason: "rejected", size: file.size })),
+    ];
+    if (results.length === 0) return;
+    setMessage(summarizeSelection(results), results.length > 1 ? results : null, "Selected for upload");
+  }
+
   function handleUploadDragOver(event: DragEvent<HTMLDivElement>) {
     if (!selectedProject) return;
     event.preventDefault();
@@ -553,7 +585,7 @@ export default function ProjectWorkspace() {
     if (dropped.length === 0) return;
     const accepted = dropped.filter((file) => ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
     const rejected = dropped.filter((file) => !ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(file.name)));
-    void uploadFiles(accepted, rejected);
+    stageFiles(accepted, rejected);
   }
 
   async function replaceFile(file: SourceFile) {
@@ -1032,10 +1064,10 @@ export default function ProjectWorkspace() {
       </p>
       {messageDetails && messageDetails.length > 1 && showMessageDetails && (
         <div className="batch-details" role="status">
-          {groupBatchResults(messageDetails).map((group) => (
+          {groupBatchResults(messageDetails, messageSuccessLabel).map((group) => (
             <div className="batch-details-group" key={group.label}>
               <strong>{group.label} ({group.items.length})</strong>
-              <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
+              <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.size !== undefined ? ` (${formatFileSize(item.size)})` : ""}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
             </div>
           ))}
         </div>
@@ -1057,7 +1089,7 @@ export default function ProjectWorkspace() {
         <section className="project-detail">
           {selectedProject ? <>
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button></div>
-            <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setPendingFiles(Array.from(event.target.files ?? []))} /></label><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button></form></div>
+            <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button></form></div>
             <div className="file-list">
               <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
               {files.length > 0 && <div className="file-list-controls">
