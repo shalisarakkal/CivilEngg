@@ -42,7 +42,7 @@ The same pattern as Archived files, one level up: a running count ("N archived p
 
 ## Right Panel — Active Project
 
-Nothing in this panel renders until a project is selected; before that, it shows "Create your first project."
+Nothing in this panel renders until a project is selected; before that, it shows "Create your first project." if no project exists at all, or "Select your project" if one or more do but none is currently chosen (e.g. right after archiving the active project while two or more others remain). If archiving the active project leaves exactly one other project, that one is auto-selected instead of dropping to the empty state at all.
 
 At the top, next to the project name, an **"Archive project"** button opens a confirmation dialog ("Archive `<name>`?"). Confirming hides the project from the sidebar's Project list and moves it to "Archived projects"; its files, revisions, calculations, summaries, and questions all become inaccessible along with it — none of it is deleted, but none of it is reachable either until the project is restored, at which point everything comes back exactly as it was.
 

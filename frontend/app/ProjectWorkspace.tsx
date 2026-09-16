@@ -339,15 +339,23 @@ export default function ProjectWorkspace() {
         setMessage(error.detail ?? `Project archive failed (HTTP ${response.status}).`);
         return;
       }
-      setProjects((current) => current.filter((item) => item.id !== project.id));
+      const remainingProjects = projects.filter((item) => item.id !== project.id);
+      setProjects(remainingProjects);
       if (selectedProject?.id === project.id) {
-        setSelectedProject(null);
-        setFiles([]);
-        setRevisions([]);
-        setEntities([]);
-        setCalculations([]);
-        setSummary(null);
-        setQuestionHistory([]);
+        if (remainingProjects.length === 1) {
+          // Exactly one project is left, so there's nothing ambiguous about
+          // which one to show next -- select it instead of dropping to the
+          // empty state even though other projects exist.
+          await selectProject(remainingProjects[0]);
+        } else {
+          setSelectedProject(null);
+          setFiles([]);
+          setRevisions([]);
+          setEntities([]);
+          setCalculations([]);
+          setSummary(null);
+          setQuestionHistory([]);
+        }
       }
       setMessage(`${project.name} was archived.`);
       await loadArchivedProjects();
@@ -1212,7 +1220,7 @@ export default function ProjectWorkspace() {
             {filePendingDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><p className="eyebrow">Archive file</p><h3 id="delete-title">Remove {filePendingDelete.original_name}?</h3><p className="muted">The file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => setFilePendingDelete(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `delete:${filePendingDelete.id}`} onClick={() => void confirmDeleteFile()}>{busyAction === `delete:${filePendingDelete.id}` ? "Archiving..." : "Archive file"}</button></div></section></div>}
             {filePendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purge-title"><p className="eyebrow">Permanent purge</p><h3 id="purge-title">Permanently delete {filePendingPurge.original_name}?</h3><p className="muted">This removes the archived file and its metadata. Accepted revisions and calculations remain, but the original source cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => setFilePendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `purge:${filePendingPurge.id}`} onClick={() => void confirmPurgeArchivedFile()}>{busyAction === `purge:${filePendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
             {filesPendingBatchDelete && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-delete-title"><p className="eyebrow">Archive files</p><h3 id="batch-delete-title">Archive {filesPendingBatchDelete.length} file{filesPendingBatchDelete.length === 1 ? "" : "s"}?</h3><p className="muted">{filesPendingBatchDelete.map((file) => file.original_name).join(", ")}</p><p className="muted">Each file will be hidden from this workspace and moved to the archive. Accepted revisions and calculations will remain.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchDeleteFiles()}>{batchBusy === "archive" ? "Archiving..." : "Archive files"}</button></div></section></div>}
-          </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
+          </> : <div className="empty-detail"><p className="eyebrow">Start here</p>{projects.length > 0 ? <><h2>Select your project.</h2><p className="muted">Choose a project from the list on the left to see its files, revisions, and calculations.</p></> : <><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></>}</div>}
         </section>
       </section>
       {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive, along with everything in it — its files, revisions, calculations, summaries, and questions become inaccessible until you restore it. Nothing is deleted; restoring brings it all back exactly as it was.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}

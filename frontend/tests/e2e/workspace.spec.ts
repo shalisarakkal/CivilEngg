@@ -19,22 +19,24 @@ async function json(route: Route, body: unknown, status = 200) {
 }
 
 /** Wires up the baseline set of API routes every workspace load depends on. */
-async function mockBaseline(page: Page, projects: unknown[] = []) {
+async function mockBaseline(page: Page, projects: { id: string }[] = []) {
   await page.route(`${API}/projects`, async (route) => {
     if (route.request().method() === "GET") return json(route, projects);
     return route.continue();
   });
   await page.route(`${API}/admin/files/archived`, (route) => json(route, []));
-  await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
-    if (route.request().method() === "GET") return json(route, []);
-    return route.continue();
-  });
-  await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) => json(route, []));
-  await page.route(`${API}/projects/${PROJECT.id}/calculations`, async (route) => {
-    if (route.request().method() === "GET") return json(route, []);
-    return route.continue();
-  });
-  await page.route(`${API}/projects/${PROJECT.id}/processing`, (route) => json(route, []));
+  for (const project of projects) {
+    await page.route(`${API}/projects/${project.id}/files`, async (route) => {
+      if (route.request().method() === "GET") return json(route, []);
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${project.id}/site-model/revisions`, (route) => json(route, []));
+    await page.route(`${API}/projects/${project.id}/calculations`, async (route) => {
+      if (route.request().method() === "GET") return json(route, []);
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${project.id}/processing`, (route) => json(route, []));
+  }
 }
 
 test.describe("project workspace", () => {
@@ -598,5 +600,89 @@ test.describe("project workspace", () => {
     // succeed on retry, so the file stays selected.
     await expect(page.getByText("1 file selected")).toBeVisible();
     await expect(uploadButton).toBeEnabled();
+  });
+
+  test("empty state: archiving the active project selects the last remaining one, or prompts to choose among several", async ({ page }) => {
+    const PROJECT_B = { ...PROJECT, id: "22222222-2222-2222-2222-222222222222", name: "Maple Ave Site" };
+    const PROJECT_C = { ...PROJECT, id: "33333333-3333-3333-3333-333333333333", name: "Elm Street Site" };
+    await mockBaseline(page, [PROJECT, PROJECT_B, PROJECT_C]);
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
+    await page.route(`${API}/projects/${PROJECT.id}/archive`, (route) => json(route, { ...PROJECT, archived_at: "2026-01-01T00:00:00Z" }));
+    await page.route(`${API}/projects/${PROJECT_B.id}/archive`, (route) => json(route, { ...PROJECT_B, archived_at: "2026-01-01T00:00:00Z" }));
+
+    await page.goto("/");
+    // The initial load selects the first project returned by the API.
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    // Archiving the active project with two others left should not drop to
+    // the empty state -- it's ambiguous which of the two remaining projects
+    // to show, so the user is prompted to choose instead.
+    await page.getByRole("button", { name: "Archive project" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Archive project" }).click();
+    await expect(page.getByText("Select your project.")).toBeVisible();
+    await expect(page.getByText("Create your first project.")).toHaveCount(0);
+
+    // Select the second project, then archive it too -- now only one
+    // project is left, so there's nothing ambiguous about auto-selecting it.
+    await page.locator(".project-list").getByText(PROJECT_B.name).click();
+    await expect(page.getByRole("heading", { name: PROJECT_B.name })).toBeVisible();
+    await page.getByRole("button", { name: "Archive project" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Archive project" }).click();
+
+    await expect(page.getByRole("heading", { name: PROJECT_C.name })).toBeVisible();
+    await expect(page.getByText("Select your project.")).toHaveCount(0);
+  });
+
+  test("project lifecycle: archive, restore, and permanently purge from the UI", async ({ page }) => {
+    let archivedProjects: unknown[] = [];
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, archivedProjects));
+    await page.route(`${API}/projects/${PROJECT.id}/archive`, (route) => {
+      archivedProjects = [{ ...PROJECT, archived_at: "2026-01-01T00:00:00Z" }];
+      return json(route, { ...PROJECT, archived_at: "2026-01-01T00:00:00Z" });
+    });
+    await page.route(`${API}/admin/projects/${PROJECT.id}/restore`, (route) => {
+      archivedProjects = [];
+      return json(route, { ...PROJECT, archived_at: null });
+    });
+    await page.route(`${API}/admin/projects/${PROJECT.id}`, async (route) => {
+      if (route.request().method() === "DELETE") {
+        archivedProjects = [];
+        return route.fulfill({ status: 204 });
+      }
+      return route.continue();
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    // Archive.
+    await page.getByRole("button", { name: "Archive project" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Archive project" }).click();
+    await expect(page.getByText(`${PROJECT.name} was archived.`)).toBeVisible();
+    await expect(page.getByText("Create your first project.")).toBeVisible();
+    await expect(page.getByText("1 archived project")).toBeVisible();
+    await expect(page.locator(".admin-panel", { hasText: "Archived projects" })).toContainText(PROJECT.name);
+
+    // Restore.
+    await page.getByRole("button", { name: "Restore" }).click();
+    await expect(page.getByText(`${PROJECT.name} was restored.`)).toBeVisible();
+    await expect(page.getByText("0 archived projects")).toBeVisible();
+    await expect(page.locator(".project-list")).toContainText(PROJECT.name);
+    // Restoring doesn't re-select it -- the same "which one?" ambiguity as
+    // archiving applies here too, so it just reappears in the list.
+    await expect(page.getByText("Select your project.")).toBeVisible();
+
+    // Re-select it, archive it again, then permanently purge it.
+    await page.locator(".project-list").getByText(PROJECT.name).click();
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+    await page.getByRole("button", { name: "Archive project" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Archive project" }).click();
+    await expect(page.getByText("1 archived project")).toBeVisible();
+
+    await page.getByRole("button", { name: "Purge" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Permanently delete" }).click();
+    await expect(page.getByText(`${PROJECT.name} was permanently deleted.`)).toBeVisible();
+    await expect(page.getByText("0 archived projects")).toBeVisible();
   });
 });

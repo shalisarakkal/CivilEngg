@@ -301,7 +301,7 @@ Phase 6 lifecycle additions:
 - [x] Add a project permanent-purge endpoint: delete the project row (cascading to its files, jobs, revisions, entities, calculations, summaries, and Q&A history via existing `ondelete="CASCADE"` foreign keys) and delete its local storage subdirectory
 - [x] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
 - [x] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
-- [ ] Fix the empty-workspace state showing "Create your first project" even when projects exist (found via the new archive action: archiving the currently-active project always clears the selection to null, even when other projects remain). Show "Select your project" instead when one or more projects exist but none is selected, and auto-select the remaining project when exactly one is left after an action like archiving.
+- [x] Fix the empty-workspace state showing "Create your first project" even when projects exist (found via the new archive action: archiving the currently-active project always clears the selection to null, even when other projects remain). Shows "Select your project" instead when one or more projects exist but none is selected, and auto-selects the remaining project when exactly one is left after archiving the active one.
 - [x] Support selecting multiple files in a project's file list (checkboxes or a "select all")
 - [x] Support uploading multiple files in one action instead of one at a time
 - [x] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
@@ -313,7 +313,7 @@ Phase 6 lifecycle additions:
 - [x] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list
 - [x] Report partial success/failure clearly for every multi-file action (e.g. if one file fails to process, the others still complete and the failure is called out) rather than an all-or-nothing result
 - [x] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases. Multi-file operations turned out not to need new backend endpoints at all: each batch action (upload, process, archive, restore, purge) is the frontend calling the same existing single-file endpoint once per selected file (`Promise.all` for process/archive/restore/purge, sequential for upload to preserve duplicate-checksum ordering) and aggregating the per-file results into one status message. So "API integration tests for batch paths" is covered by the existing single-file endpoint tests in `test_api.py` plus the new Playwright coverage below, which exercises the aggregation and partial-failure reporting directly.
-- [ ] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow. The multi-file half is done (multi-file upload and a partial-failure batch archive, in `workspace.spec.ts`); project archive/restore/purge still has no dedicated Playwright test and remains open.
+- [x] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow. Both halves are now covered in `workspace.spec.ts`: a full project archive/restore/re-archive/purge lifecycle test, plus the multi-file upload and partial-failure batch-archive tests added earlier.
 
 **Exit criteria:**
 
