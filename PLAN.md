@@ -297,10 +297,10 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Add a project restore endpoint (reverse an archive)
-- [ ] Add a project permanent-purge endpoint: delete the project row (cascading to its files, jobs, revisions, entities, calculations, summaries, and Q&A history via existing `ondelete="CASCADE"` foreign keys) and delete its local storage subdirectory
-- [ ] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
-- [ ] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
+- [x] Add a project restore endpoint (reverse an archive)
+- [x] Add a project permanent-purge endpoint: delete the project row (cascading to its files, jobs, revisions, entities, calculations, summaries, and Q&A history via existing `ondelete="CASCADE"` foreign keys) and delete its local storage subdirectory
+- [x] Add an in-app archive action with confirmation for a project, mirroring the existing file-row pattern
+- [x] Add archived projects to the admin panel (or a dedicated section) with restore and permanent-purge actions, mirroring the existing archived-files panel
 - [ ] Support selecting multiple files in a project's file list (checkboxes or a "select all")
 - [ ] Support uploading multiple files in one action instead of one at a time
 - [ ] Support drag-and-drop file upload (single or multiple files) as an alternative to the file picker, with drag-over visual feedback and unsupported-type rejection before upload
@@ -310,13 +310,13 @@ Phase 6 lifecycle additions:
 - [ ] Support permanently purging multiple archived files in one action
 - [ ] Add client-side sort (name, date, status) and filter (status, file type) controls to a project's file list
 - [ ] Report partial success/failure clearly for every multi-file action (e.g. if one file fails to process, the others still complete and the failure is called out) rather than an all-or-nothing result
-- [ ] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases
+- [ ] Add unit and API integration tests for the new project-lifecycle endpoints and every multi-file batch path, including partial-failure cases (project-lifecycle endpoints done in `test_api.py`; multi-file batch paths still open)
 - [ ] Add Playwright coverage for project archive/restore/purge and at least one multi-file flow
 
 **Exit criteria:**
 
-- [ ] A user can archive a project from the UI with confirmation, see it in an admin list, restore it, and permanently purge it — the same lifecycle files already have
-- [ ] Permanently purging a project removes its database rows and its on-disk storage directory
+- [x] A user can archive a project from the UI with confirmation, see it in an admin list, restore it, and permanently purge it — the same lifecycle files already have
+- [x] Permanently purging a project removes its database rows and its on-disk storage directory
 - [ ] A user can select multiple files in a project and upload, process, archive, restore, or permanently purge them in a single action
 - [ ] A user can drag one or more files onto the upload area to upload them, with clear feedback while dragging and a clear rejection message for an unsupported file type
 - [ ] A user can sort a project's file list (name, date, status) and filter it (status, file type)

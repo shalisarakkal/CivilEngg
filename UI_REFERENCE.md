@@ -20,7 +20,7 @@ There is currently one screen. Everything below lives on it.
 
 Below the "New project" form, every non-archived project is listed by name with its unit system (e.g. "imperial") underneath. **Click a project row** to make it the active project — this loads its files, processing jobs, site-model revisions, and calculations into the right-hand panel. The currently active project is highlighted with a left border.
 
-Projects themselves have no delete/archive control in this UI today — only files within a project do (see below).
+Archiving a project (see "Archive project" below) is the only way to remove it from this list; there's no direct delete here.
 
 ### Admin archive
 
@@ -29,9 +29,18 @@ Shows a running count ("N archived files") and, underneath, one row per archived
 - **Restore** — brings the file back to its project's normal file list, in whatever status it had when archived.
 - **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the file's database record and on-disk copy. Accepted revisions and calculations that already exist stay intact; only the original source file becomes unrecoverable.
 
+### Archived projects
+
+The same pattern as Admin archive, one level up: a running count ("N archived projects") and one row per archived project across the whole app, each with:
+
+- **Restore** — brings the project back to the Project list above, fully intact (files, revisions, calculations, summaries, and questions were never touched by archiving).
+- **Purge** — opens a confirmation dialog ("Permanently delete `<name>`?"); confirming permanently deletes the project's database rows (cascading to everything under it — files, jobs, revisions, entities, calculations, summaries, questions) and its on-disk storage folder. This cannot be undone. A non-archived project can't be purged directly — it has to be archived first.
+
 ## Right Panel — Active Project
 
 Nothing in this panel renders until a project is selected; before that, it shows "Create your first project."
+
+At the top, next to the project name, an **"Archive project"** button opens a confirmation dialog ("Archive `<name>`?"). Confirming hides the project from the sidebar's Project list and moves it to "Archived projects"; its files, revisions, calculations, summaries, and questions all remain untouched and come back exactly as they were if the project is later restored.
 
 ### Source files (upload)
 
@@ -87,10 +96,12 @@ A form to run one deterministic geometric calculation at a time, plus a running 
 
 ## Confirmation Dialogs
 
-Two modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
+Four modal dialogs interrupt the flow for destructive-ish actions, each with Cancel and a confirm button:
 
 - **Archive file** — triggered by a file row's Delete button.
-- **Permanent purge** — triggered by the Admin archive panel's Purge button.
+- **Permanent purge (file)** — triggered by the Admin archive panel's Purge button.
+- **Archive project** — triggered by the "Archive project" button on the active project.
+- **Permanent purge (project)** — triggered by the Archived projects panel's Purge button.
 
 ---
 
@@ -106,3 +117,4 @@ Two modal dialogs interrupt the flow for destructive-ish actions, each with Canc
 - How to generate a site summary and choose its scope
 - How to ask a question and interpret confidence/limitations
 - How to archive, restore, and permanently delete a file
+- How to archive, restore, and permanently delete a project

@@ -57,6 +57,7 @@ from civil_engineering.storage import (
     FileValidationError,
     archive_file,
     remove_file,
+    remove_project_storage,
     restore_file,
     save_upload,
 )
@@ -163,6 +164,38 @@ def archive_project(project_id: str, database: Session = Depends(get_db)) -> Pro
     database.commit()
     database.refresh(project)
     return project
+
+
+@router.get("/admin/projects/archived", response_model=list[ProjectResponse])
+def list_archived_projects(database: Session = Depends(get_db)) -> list[Project]:
+    return list(
+        database.scalars(
+            select(Project)
+            .where(Project.archived_at.is_not(None))
+            .order_by(Project.archived_at.desc())
+        )
+    )
+
+
+@router.post("/admin/projects/{project_id}/restore", response_model=ProjectResponse)
+def restore_archived_project(project_id: str, database: Session = Depends(get_db)) -> Project:
+    project = database.get(Project, project_id)
+    if project is None or project.archived_at is None:
+        raise HTTPException(status_code=404, detail="Archived project not found")
+    project.archived_at = None
+    database.commit()
+    database.refresh(project)
+    return project
+
+
+@router.delete("/admin/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def purge_archived_project(project_id: str, database: Session = Depends(get_db)) -> None:
+    project = database.get(Project, project_id)
+    if project is None or project.archived_at is None:
+        raise HTTPException(status_code=404, detail="Archived project not found")
+    remove_project_storage(project.id)
+    database.delete(project)
+    database.commit()
 
 
 async def _upload_source_file(

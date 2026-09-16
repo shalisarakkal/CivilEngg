@@ -123,6 +123,9 @@ export default function ProjectWorkspace() {
   const [files, setFiles] = useState<SourceFile[]>([]);
   const [processingJobs, setProcessingJobs] = useState<ProcessingJob[]>([]);
   const [archivedFiles, setArchivedFiles] = useState<SourceFile[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  const [projectPendingArchive, setProjectPendingArchive] = useState<Project | null>(null);
+  const [projectPendingPurge, setProjectPendingPurge] = useState<Project | null>(null);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [calculations, setCalculations] = useState<Calculation[]>([]);
@@ -218,6 +221,89 @@ export default function ProjectWorkspace() {
   async function loadArchivedFiles() {
     const response = await fetch(`${apiUrl}/admin/files/archived`);
     if (response.ok) setArchivedFiles(await response.json());
+  }
+
+  async function loadArchivedProjects() {
+    const response = await fetch(`${apiUrl}/admin/projects/archived`);
+    if (response.ok) setArchivedProjects(await response.json());
+  }
+
+  async function confirmArchiveProject() {
+    if (!projectPendingArchive) return;
+    const project = projectPendingArchive;
+    if (busyAction === `project-archive:${project.id}`) return;
+    setBusyAction(`project-archive:${project.id}`);
+    setMessage(`Archiving ${project.name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/projects/${project.id}/archive`, { method: "POST" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Project archive failed (HTTP ${response.status}).`);
+        return;
+      }
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      if (selectedProject?.id === project.id) {
+        setSelectedProject(null);
+        setFiles([]);
+        setRevisions([]);
+        setEntities([]);
+        setCalculations([]);
+        setSummary(null);
+        setQuestionHistory([]);
+      }
+      setMessage(`${project.name} was archived.`);
+      await loadArchivedProjects();
+    } catch (error) {
+      setMessage(error instanceof Error ? `Archive request failed: ${error.message}` : "Archive request failed.");
+    } finally {
+      setBusyAction(null);
+      setProjectPendingArchive(null);
+    }
+  }
+
+  async function restoreArchivedProject(project: Project) {
+    if (busyAction === `project-restore:${project.id}`) return;
+    setBusyAction(`project-restore:${project.id}`);
+    setMessage(`Restoring ${project.name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/admin/projects/${project.id}/restore`, { method: "POST" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Restore failed (HTTP ${response.status}).`);
+        return;
+      }
+      const restored: Project = await response.json();
+      setArchivedProjects((current) => current.filter((item) => item.id !== project.id));
+      setProjects((current) => [...current, restored]);
+      setMessage(`${project.name} was restored.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Restore request failed: ${error.message}` : "Restore request failed.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function confirmPurgeArchivedProject() {
+    if (!projectPendingPurge) return;
+    const project = projectPendingPurge;
+    if (busyAction === `project-purge:${project.id}`) return;
+    setBusyAction(`project-purge:${project.id}`);
+    setMessage(`Permanently deleting ${project.name}...`);
+    try {
+      const response = await fetch(`${apiUrl}/admin/projects/${project.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        setMessage(error.detail ?? `Purge failed (HTTP ${response.status}).`);
+        return;
+      }
+      setArchivedProjects((current) => current.filter((item) => item.id !== project.id));
+      setMessage(`${project.name} was permanently deleted.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Purge request failed: ${error.message}` : "Purge request failed.");
+    } finally {
+      setBusyAction(null);
+      setProjectPendingPurge(null);
+    }
   }
 
   async function selectProject(project: Project) {
@@ -668,6 +754,8 @@ export default function ProjectWorkspace() {
       await loadInitialProjects();
       const archiveResponse = await fetch(`${apiUrl}/admin/files/archived`);
       if (archiveResponse.ok) setArchivedFiles(await archiveResponse.json());
+      const archivedProjectsResponse = await fetch(`${apiUrl}/admin/projects/archived`);
+      if (archivedProjectsResponse.ok) setArchivedProjects(await archivedProjectsResponse.json());
     }
 
     void loadInitialData();
@@ -692,10 +780,11 @@ export default function ProjectWorkspace() {
             {projects.map((project) => <button className={`project-item ${selectedProject?.id === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectProject(project)}><span>{project.name}</span><small>{project.default_unit_system}</small></button>)}
           </div>
           <section className="admin-panel"><p className="eyebrow">Admin archive</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.map((file) => <div className="archive-row" key={file.id}><strong>{file.original_name}</strong><div><button disabled={busyAction === `restore:${file.id}`} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}`} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
+          <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
-            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><span className="project-mark">06</span></div>
+            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button></div>
             <div className="upload-panel"><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB.</p></div><form className="upload-form" onSubmit={uploadFile}><label className="file-picker" htmlFor="source-file"><span>{selectedFile?.name ?? "Choose a source file"}</span><input id="source-file" type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label><button type="submit" disabled={loading || selectedFile === null}>Upload file</button></form></div>
             <div className="file-list"><div className="list-heading"><span>File</span><span>Status / actions</span></div>{files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}{files.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><div><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}`} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}`} onClick={() => void deleteFile(file)}>Delete</button></div></div>; })}</div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
@@ -706,6 +795,8 @@ export default function ProjectWorkspace() {
           </> : <div className="empty-detail"><p className="eyebrow">Start here</p><h2>Create your first project.</h2><p className="muted">Your project becomes the home for plans, source files, measured results, and site-model revisions.</p></div>}
         </section>
       </section>
+      {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive. Its files, revisions, calculations, summaries, and questions all remain and are restored along with it.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}
+      {projectPendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="project-purge-title">Permanently delete {projectPendingPurge.name}?</h3><p className="muted">This removes the project, all its files, revisions, calculations, summaries, and questions, and its on-disk storage — permanently. This cannot be undone.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => setProjectPendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => void confirmPurgeArchivedProject()}>{busyAction === `project-purge:${projectPendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
     </main>
   );
 }

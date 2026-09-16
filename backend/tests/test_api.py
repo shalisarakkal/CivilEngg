@@ -164,3 +164,77 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
+
+
+def test_project_archive_restore_and_permanent_purge(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        database = sessions()
+        try:
+            yield database
+        finally:
+            database.close()
+
+    monkeypatch.setenv("LOCAL_STORAGE_PATH", str(tmp_path))
+    from civil_engineering.config import get_settings
+
+    get_settings.cache_clear()
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    try:
+        project = client.post("/projects", json={"name": "Purge Site"}).json()
+        project_id = project["id"]
+        uploaded = client.post(
+            f"/projects/{project_id}/files",
+            files={"file": ("survey.txt", b"elevation=102.5", "text/plain")},
+        ).json()
+        storage_dir = tmp_path / project_id
+        assert storage_dir.is_dir()
+
+        # Archiving hides the project from normal routes but not from the admin list.
+        assert client.post(f"/projects/{project_id}/archive").status_code == 200
+        assert client.get(f"/projects/{project_id}").status_code == 404
+        assert client.get("/projects").json() == []
+        archived_list = client.get("/admin/projects/archived")
+        assert archived_list.status_code == 200
+        assert any(item["id"] == project_id for item in archived_list.json())
+
+        # Restoring brings it back to normal routes.
+        restored = client.post(f"/admin/projects/{project_id}/restore")
+        assert restored.status_code == 200
+        assert restored.json()["archived_at"] is None
+        assert client.get(f"/projects/{project_id}").status_code == 200
+        assert any(item["id"] == project_id for item in client.get("/projects").json())
+
+        # A non-archived project can't be purged.
+        assert client.delete(f"/admin/projects/{project_id}").status_code == 404
+
+        # Archive again, then permanently purge: DB rows and storage directory both go.
+        client.post(f"/projects/{project_id}/archive")
+        purged = client.delete(f"/admin/projects/{project_id}")
+        assert purged.status_code == 204
+        assert client.get(f"/admin/projects/archived").json() == []
+        assert not storage_dir.exists()
+
+        # Purging twice (or restoring after purge) 404s: the project is gone.
+        assert client.delete(f"/admin/projects/{project_id}").status_code == 404
+        assert client.post(f"/admin/projects/{project_id}/restore").status_code == 404
+
+        # The file row is gone too (cascaded from the project delete).
+        from civil_engineering.models import SourceFile
+
+        with sessions() as verify_session:
+            assert verify_session.get(SourceFile, uploaded["id"]) is None
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()

@@ -34,6 +34,9 @@ Client and project routes are available without authentication in the current lo
 - `GET /projects/{project_id}` - retrieve a project
 - `PATCH /projects/{project_id}` - update a project
 - `POST /projects/{project_id}/archive` - archive a project
+- `GET /admin/projects/archived` - list archived projects
+- `POST /admin/projects/{project_id}/restore` - restore an archived project
+- `DELETE /admin/projects/{project_id}` - permanently purge an archived project (deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, and Q&A history, and its on-disk storage directory)
 
 ## Files and Processing
 

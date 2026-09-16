@@ -1,6 +1,6 @@
 from hashlib import sha256
 from pathlib import Path
-from shutil import move
+from shutil import move, rmtree
 
 from fastapi import UploadFile
 
@@ -103,3 +103,11 @@ def restore_file(archived_path: str, project_id: str, file_id: str, extension: s
     if archive.is_file():
         move(str(archive), str(destination))
     return destination
+
+
+def remove_project_storage(project_id: str) -> None:
+    root = storage_root()
+    for directory in (root / project_id, root / ".archive" / project_id):
+        if root not in directory.resolve().parents:
+            raise FileValidationError("Project storage path is outside local storage")
+        rmtree(directory, ignore_errors=True)
