@@ -74,19 +74,33 @@ function fileTypeGroup(name: string): string {
   return extension === "tiff" ? "tif" : extension;
 }
 
-type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean };
+type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected" };
 
 function summarizeBatchResult(verb: string, results: BatchResult[]): string {
-  const succeeded = results.filter((result) => result.ok);
-  const failed = results.filter((result) => !result.ok);
   if (results.length === 1) {
     const [only] = results;
     return only.ok ? `${only.name} ${verb}.` : `${only.name} could not be ${verb}: ${only.detail}`;
   }
-  if (failed.length === 0) return `${succeeded.length} file(s) ${verb}.`;
-  const failureList = failed.map((result) => `${result.name} (${result.detail})`).join(", ");
-  if (succeeded.length === 0) return `${verb[0].toUpperCase()}${verb.slice(1)} failed for all ${failed.length} file(s): ${failureList}`;
-  return `${succeeded.length} of ${results.length} file(s) ${verb}. Failed: ${failureList}`;
+  const succeeded = results.filter((result) => result.ok).length;
+  const failed = results.length - succeeded;
+  if (failed === 0) return `${succeeded} file(s) ${verb}.`;
+  if (succeeded === 0) return `${verb[0].toUpperCase()}${verb.slice(1)} failed for all ${failed} file(s).`;
+  return `${succeeded} of ${results.length} file(s) ${verb}, ${failed} failed.`;
+}
+
+const BATCH_DETAIL_GROUP_ORDER = ["Successful", "Failed — duplicate file", "Failed — not supported", "Failed"] as const;
+
+function batchResultGroup(result: BatchResult): (typeof BATCH_DETAIL_GROUP_ORDER)[number] {
+  if (result.ok) return "Successful";
+  if (result.reason === "duplicate") return "Failed — duplicate file";
+  if (result.reason === "rejected") return "Failed — not supported";
+  return "Failed";
+}
+
+function groupBatchResults(results: BatchResult[]): { label: string; items: BatchResult[] }[] {
+  return BATCH_DETAIL_GROUP_ORDER.map((label) => ({ label, items: results.filter((result) => batchResultGroup(result) === label) })).filter(
+    (group) => group.items.length > 0,
+  );
 }
 
 function formatCalculationInputs(inputs: Record<string, unknown>): string {
@@ -180,7 +194,15 @@ export default function ProjectWorkspace() {
   const [horizontalDistance, setHorizontalDistance] = useState("100");
   const [geometry, setGeometry] = useState(defaultGeometry);
   const [secondGeometry, setSecondGeometry] = useState('{"type":"Point","coordinates":[3,4]}');
-  const [message, setMessage] = useState("Ready for your first project.");
+  const [message, setMessageText] = useState("Ready for your first project.");
+  const [messageDetails, setMessageDetails] = useState<BatchResult[] | null>(null);
+  const [showMessageDetails, setShowMessageDetails] = useState(false);
+
+  function setMessage(text: string, details: BatchResult[] | null = null) {
+    setMessageText(text);
+    setMessageDetails(details);
+    setShowMessageDetails(false);
+  }
   const [loading, setLoading] = useState(false);
   const [filePendingDelete, setFilePendingDelete] = useState<SourceFile | null>(null);
   const [filePendingPurge, setFilePendingPurge] = useState<SourceFile | null>(null);
@@ -477,14 +499,20 @@ export default function ProjectWorkspace() {
           } else {
             const error = await response.json().catch(() => ({}));
             // A duplicate-content rejection (409) would only fail the same way again on retry.
-            results.push({ name: file.name, ok: false, detail: error.detail ?? `HTTP ${response.status}`, retryable: response.status !== 409 });
+            results.push({
+              name: file.name,
+              ok: false,
+              detail: error.detail ?? `HTTP ${response.status}`,
+              retryable: response.status !== 409,
+              reason: response.status === 409 ? "duplicate" : response.status === 400 ? "rejected" : undefined,
+            });
           }
         } catch (error) {
           results.push({ name: file.name, ok: false, detail: error instanceof Error ? error.message : "request failed", retryable: true });
         }
       }
       await loadProjectData(selectedProject);
-      setMessage(summarizeBatchResult("uploaded and queued for processing", results));
+      setMessage(summarizeBatchResult("uploaded and queued for processing", results), results.length > 1 ? results : null);
     } finally {
       setLoading(false);
       setPendingFiles(filesToUpload.filter((_, index) => results[index] && !results[index].ok && results[index].retryable !== false));
@@ -704,7 +732,7 @@ export default function ProjectWorkspace() {
       }),
     );
     await loadProjectData(selectedProject);
-    setMessage(summarizeBatchResult("processed", results));
+    setMessage(summarizeBatchResult("processed", results), results.length > 1 ? results : null);
     setSelectedFileIds(new Set());
     setBatchBusy(null);
   }
@@ -729,7 +757,7 @@ export default function ProjectWorkspace() {
     const archivedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setFiles((current) => current.filter((file) => !archivedIds.has(file.id)));
     await loadArchivedFiles();
-    setMessage(summarizeBatchResult("archived", results));
+    setMessage(summarizeBatchResult("archived", results), results.length > 1 ? results : null);
     setSelectedFileIds(new Set());
     setBatchBusy(null);
     setFilesPendingBatchDelete(null);
@@ -755,7 +783,7 @@ export default function ProjectWorkspace() {
     const restoredIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setArchivedFiles((current) => current.filter((file) => !restoredIds.has(file.id)));
     if (selectedProject) await loadProjectData(selectedProject);
-    setMessage(summarizeBatchResult("restored", results));
+    setMessage(summarizeBatchResult("restored", results), results.length > 1 ? results : null);
     setSelectedArchivedFileIds(new Set());
     setBatchBusy(null);
   }
@@ -779,7 +807,7 @@ export default function ProjectWorkspace() {
     );
     const purgedIds = new Set(targets.filter((_, index) => results[index].ok).map((file) => file.id));
     setArchivedFiles((current) => current.filter((file) => !purgedIds.has(file.id)));
-    setMessage(summarizeBatchResult("permanently deleted", results));
+    setMessage(summarizeBatchResult("permanently deleted", results), results.length > 1 ? results : null);
     setSelectedArchivedFileIds(new Set());
     setBatchBusy(null);
     setArchivedFilesPendingBatchPurge(null);
@@ -984,7 +1012,24 @@ export default function ProjectWorkspace() {
         <div><p className="eyebrow">Civil engineering intelligence</p><h1>Project workspace</h1></div>
         <span className={`status ${apiStatus && !apiStatus.ok ? "status-error" : ""}`}>{apiStatus === null ? "Checking API..." : apiStatus.ok ? `API connected · ${apiStatus.environment}` : "API unreachable"}</span>
       </header>
-      <p className="message" role="status">{message}</p>
+      <p className="message" role="status">
+        {message}
+        {messageDetails && messageDetails.length > 1 && (
+          <button type="button" className="message-details-toggle" onClick={() => setShowMessageDetails((current) => !current)}>
+            {showMessageDetails ? "Hide details" : "Show details"}
+          </button>
+        )}
+      </p>
+      {messageDetails && messageDetails.length > 1 && showMessageDetails && (
+        <div className="batch-details" role="status">
+          {groupBatchResults(messageDetails).map((group) => (
+            <div className="batch-details-group" key={group.label}>
+              <strong>{group.label} ({group.items.length})</strong>
+              <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
+            </div>
+          ))}
+        </div>
+      )}
       <section className="workspace-grid">
         <aside className="project-panel">
           <p className="eyebrow">Projects</p>

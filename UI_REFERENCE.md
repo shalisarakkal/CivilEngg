@@ -8,7 +8,7 @@ There is currently one screen. Everything below lives on it.
 
 - **"Project workspace" title** — a static label.
 - **API status badge** — a live indicator, checked once when the page loads: "API connected · `<environment>`" (the backend's actual `APP_ENV` value) in blue if `GET /health` succeeds, or "API unreachable" in red if it fails or the backend can't be reached at all.
-- **Status message banner** — a single line just under the header, pinned to the top of the screen (stays visible while you scroll). Every action in the app — creating a project, uploading a file, running a calculation, asking a question — updates this one line with what just happened or what went wrong. It only ever shows the single most recent action; it is not a log.
+- **Status message banner** — a single line just under the header, pinned to the top of the screen (stays visible while you scroll). Every action in the app — creating a project, uploading a file, running a calculation, asking a question — updates this one line with what just happened or what went wrong. It only ever shows the single most recent action; it is not a log. When the action was a multi-file batch (upload, process, archive, restore, or purge) affecting more than one file, the line is a short summary (e.g. "2 of 4 file(s) uploaded and queued for processing, 2 failed.") with a **"Show details"** link that expands a per-file breakdown grouped by outcome (Successful, Failed — duplicate file, Failed — not supported, Failed) directly underneath.
 
 ## Left Sidebar — Projects
 
@@ -50,7 +50,7 @@ At the top, next to the project name, an **"Archive project"** button opens a co
 
 - **File picker** ("Choose source file(s)") — opens the OS file dialog, restricted to `.pdf`, `.dxf`, `.csv`, `.txt`, `.tif`, `.tiff`, `.xml`, and allows selecting several files at once. Selecting files shows a count ("N file(s) selected") in place of the placeholder text.
 - **Drag and drop** — the whole source-files panel is also a drop target: dragging one or more files over it highlights the panel and shows a "Drop files to upload..." hint. Dropped files with an unsupported extension are rejected before any upload attempt (named in the status banner); every accepted file is uploaded the same way as if picked manually.
-- **"Upload file(s)" button** — disabled until at least one file is chosen. Uploads every selected file to the active project (one request per file). On success, each file appears at the top of the file list below with status "Ready to process," and the status banner reports how many succeeded (e.g. "3 file(s) uploaded and queued for processing."). If any fail, the banner instead names each failure and its reason (e.g. "2 of 3 file(s) uploaded and queued for processing. Failed: sr658.xml (File with this content already exists)"). A duplicate-content (409) rejection is dropped from the picker afterward since retrying would only fail the same way again; any other kind of failure leaves that file selected so you can retry just it.
+- **"Upload file(s)" button** — disabled until at least one file is chosen. Uploads every selected file to the active project (one request per file). On success, each file appears at the top of the file list below with status "Ready to process," and the status banner reports how many succeeded (e.g. "3 file(s) uploaded and queued for processing."). If any fail, the banner shows a short summary (e.g. "2 of 3 file(s) uploaded and queued for processing, 1 failed.") with a "Show details" link that expands the per-file breakdown, grouped as Successful / Failed — duplicate file / Failed — not supported. A duplicate-content (409) rejection is dropped from the picker afterward since retrying would only fail the same way again; any other kind of failure leaves that file selected so you can retry just it.
 
 ### File list
 
@@ -60,7 +60,7 @@ A "Select all" checkbox in the list header, sort/filter controls, and one row pe
 - **Status filter** — All statuses, or one specific status (Ready to process, Processing, Completed, Failed).
 - **Type filter** — All types, or one specific extension (PDF, DXF, CSV, TXT, TIFF, LandXML). TIFF and TIF files are grouped together.
 
-Selecting one or more files (via each row's checkbox, or "Select all," which respects the current sort/filter) reveals a batch toolbar: **"Process selected,"** **"Archive selected"** (opens the same style of confirmation dialog as a single delete, listing every selected file by name), and **"Clear selection."** Every batch action reports partial success/failure by name in the status banner (e.g. "1 of 2 file(s) archived. Failed: sr658.xml (File is already archived)") rather than succeeding or failing as a single unit.
+Selecting one or more files (via each row's checkbox, or "Select all," which respects the current sort/filter) reveals a batch toolbar: **"Process selected,"** **"Archive selected"** (opens the same style of confirmation dialog as a single delete, listing every selected file by name), and **"Clear selection."** Every batch action reports partial success/failure — a short summary in the status banner (e.g. "1 of 2 file(s) archived, 1 failed.") with a "Show details" link to the full per-file breakdown — rather than succeeding or failing as a single unit.
 
 Each row shows:
 

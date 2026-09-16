@@ -216,9 +216,15 @@ test.describe("project workspace", () => {
     await page.getByRole("button", { name: "Archive selected" }).click();
     await page.getByRole("button", { name: "Archive files" }).click();
 
-    await expect(page.getByText(/1 of 2 file\(s\) archived\. Failed: survey-2\.csv \(File is already archived\)/)).toBeVisible();
+    await expect(page.getByText("1 of 2 file(s) archived, 1 failed.")).toBeVisible();
     await expect(page.getByText("survey-1.csv", { exact: true })).not.toBeVisible();
     await expect(page.getByText("survey-2.csv", { exact: true })).toBeVisible();
+
+    // The short summary hides the per-file breakdown behind a "Show details" toggle.
+    await expect(page.locator(".batch-details")).toHaveCount(0);
+    await page.getByRole("button", { name: "Show details" }).click();
+    await expect(page.locator(".batch-details-group", { hasText: "Successful" })).toContainText("survey-1.csv");
+    await expect(page.locator(".batch-details-group", { hasText: "Failed" })).toContainText("survey-2.csv — File is already archived");
   });
 
   test("calculation state: running a calculation renders its result", async ({ page }) => {
