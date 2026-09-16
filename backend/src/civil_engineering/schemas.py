@@ -65,6 +65,8 @@ class SourceFileResponse(BaseModel):
     processed_at: datetime | None
     error_message: str | None
     deleted_at: datetime | None
+    document_group_id: str
+    superseded_by_id: str | None
 
 
 class ProcessingJobResponse(BaseModel):
@@ -107,6 +109,7 @@ class SiteModelEntityResponse(BaseModel):
     source_reference: dict[str, object] | None
     confidence: float | None
     validation_status: str
+    created_at: datetime
 
 
 class SiteModelRevisionResponse(BaseModel):
@@ -150,20 +153,20 @@ class CalculationResponse(BaseModel):
 class SummaryResponse(BaseModel):
     id: str
     project_id: str
-    revision_id: str | None
+    revision_ids: list[str] | None
     content: dict[str, object]
     created_at: datetime
 
 
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    revision_id: str | None = None
+    revision_ids: list[str] | None = None
 
 
 class QuestionResponse(BaseModel):
     id: str
     project_id: str
-    revision_id: str | None
+    revision_ids: list[str] | None
     question: str
     intent: str
     answer: dict[str, object]

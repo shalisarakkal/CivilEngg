@@ -19,6 +19,7 @@ def test_project_entities_persist_relationships() -> None:
             media_type="application/pdf",
             size_bytes=1024,
             checksum="a" * 64,
+            document_group_id="site-plan-group",
         )
         job = ProcessingJob(project=project, source_file=source_file)
         ProjectRevision(project=project, revision_number=1, source_job_ids=[job.id])

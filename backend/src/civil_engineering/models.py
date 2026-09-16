@@ -80,6 +80,14 @@ class SourceFile(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_path: Mapped[str | None] = mapped_column(String(1000))
     status_before_delete: Mapped[str | None] = mapped_column(String(32))
+    # Identifies the logical document lineage this file belongs to. A newly
+    # uploaded file is the only member of its own group (document_group_id ==
+    # id); an explicit "replace" creates a new file that shares the original's
+    # group so the two are recognized as versions of the same document.
+    document_group_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    superseded_by_id: Mapped[str | None] = mapped_column(
+        ForeignKey("source_files.id", ondelete="SET NULL")
+    )
 
     project: Mapped[Project] = relationship(back_populates="source_files")
     processing_jobs: Mapped[list["ProcessingJob"]] = relationship(
@@ -132,6 +140,9 @@ class ExtractedDocument(Base):
 
 class ProjectRevision(Base):
     __tablename__ = "project_revisions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "revision_number", name="uq_project_revisions_project_number"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(
@@ -164,6 +175,7 @@ class SiteModelEntity(Base):
     source_reference: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     confidence: Mapped[float | None] = mapped_column()
     validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="valid")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     revision: Mapped[ProjectRevision] = relationship(back_populates="entities")
 
@@ -198,9 +210,12 @@ class ProjectSummary(Base):
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    revision_id: Mapped[str | None] = mapped_column(
-        ForeignKey("project_revisions.id", ondelete="SET NULL")
-    )
+    # The revisions actually used to answer, resolved at request time: either
+    # explicitly chosen, or (when none were given) the project-boundary default
+    # of the latest revision per document lineage. Stored as the resolved list
+    # rather than a live reference so a past answer's provenance never changes
+    # as new revisions are accepted later.
+    revision_ids: Mapped[list[Any] | None] = mapped_column(JSON)
     content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -212,9 +227,7 @@ class QuestionAnswer(Base):
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    revision_id: Mapped[str | None] = mapped_column(
-        ForeignKey("project_revisions.id", ondelete="SET NULL")
-    )
+    revision_ids: Mapped[list[Any] | None] = mapped_column(JSON)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     intent: Mapped[str] = mapped_column(String(32), nullable=False)
     answer: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

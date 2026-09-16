@@ -64,7 +64,7 @@ def test_directional_question_resolves_the_north_boundary_via_the_api(
             f"/projects/{project['id']}/questions",
             json={
                 "question": "What is the distance to the north property line?",
-                "revision_id": revision["id"],
+                "revision_ids": [revision["id"]],
             },
         )
         assert directional.status_code == 200
@@ -79,7 +79,7 @@ def test_directional_question_resolves_the_north_boundary_via_the_api(
         # compare, unlike the directional question which resolves a specific answer.
         generic = client.post(
             f"/projects/{project['id']}/questions",
-            json={"question": "What is the setback distance?", "revision_id": revision["id"]},
+            json={"question": "What is the setback distance?", "revision_ids": [revision["id"]]},
         )
         assert generic.status_code == 200
         generic_answer = generic.json()["answer"]

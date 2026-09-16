@@ -187,3 +187,37 @@ def test_concurrent_duplicate_uploads_only_accept_one(
         assert len(files) == 1
     finally:
         _teardown()
+
+
+def test_concurrent_revision_accepts_get_unique_revision_numbers(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    client = _client_with_per_thread_connections(tmp_path, monkeypatch)
+    try:
+        project = client.post("/projects", json={"name": "Concurrent Accepts Site"}).json()
+        file_ids = []
+        for index in range(4):
+            uploaded = client.post(
+                f"/projects/{project['id']}/files",
+                files={"file": (f"survey-{index}.txt", f"elevation={index}".encode(), "text/plain")},
+            )
+            assert uploaded.status_code == 201
+            file_id = uploaded.json()["id"]
+            processed = client.post(f"/projects/{project['id']}/files/{file_id}/process")
+            assert processed.status_code == 201
+            file_ids.append(file_id)
+
+        def accept(file_id: str) -> dict:
+            response = client.post(
+                f"/projects/{project['id']}/site-model/revisions/from-extraction/{file_id}"
+            )
+            return {"status": response.status_code, "body": response.json()}
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(accept, file_ids))
+
+        assert all(result["status"] == 201 for result in results)
+        revision_numbers = [result["body"]["revision_number"] for result in results]
+        assert len(set(revision_numbers)) == len(revision_numbers)
+    finally:
+        _teardown()

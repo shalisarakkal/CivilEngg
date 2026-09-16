@@ -165,25 +165,22 @@ def archive_project(project_id: str, database: Session = Depends(get_db)) -> Pro
     return project
 
 
-@router.post(
-    "/projects/{project_id}/files",
-    response_model=SourceFileResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def upload_file(
-    project_id: str,
-    file: UploadFile = File(...),
-    database: Session = Depends(get_db),
+async def _upload_source_file(
+    project: Project,
+    file: UploadFile,
+    database: Session,
+    document_group_id: str | None,
 ) -> SourceFile:
-    project = get_project_or_404(project_id, database)
+    file_id = new_id()
     source_file = SourceFile(
-        id=new_id(),
+        id=file_id,
         project_id=project.id,
         original_name=Path(file.filename or "").name,
         stored_path="",
         media_type=file.content_type or "application/octet-stream",
         size_bytes=0,
         checksum="pending",
+        document_group_id=document_group_id or file_id,
     )
     try:
         path, size, checksum = await save_upload(file, project.id, source_file.id)
@@ -197,7 +194,11 @@ async def upload_file(
     if duplicate is not None:
         remove_file(str(path))
         raise HTTPException(
-            status_code=409, detail="A file with the same content already exists in this project"
+            status_code=409,
+            detail=(
+                f"File '{source_file.original_name}' upload failed. "
+                f"'{duplicate.original_name}' with the same content already exists in this project."
+            ),
         )
     source_file.stored_path = str(path)
     source_file.size_bytes = size
@@ -208,18 +209,79 @@ async def upload_file(
     except IntegrityError as error:
         database.rollback()
         remove_file(str(path))
+        existing = database.scalar(
+            select(SourceFile).where(
+                SourceFile.project_id == project.id, SourceFile.checksum == checksum
+            )
+        )
+        existing_name = existing.original_name if existing is not None else "another file"
         raise HTTPException(
-            status_code=409, detail="A file with the same content already exists in this project"
+            status_code=409,
+            detail=(
+                f"File '{source_file.original_name}' upload failed. "
+                f"'{existing_name}' with the same content already exists in this project."
+            ),
         ) from error
     database.refresh(source_file)
     return source_file
 
 
+@router.post(
+    "/projects/{project_id}/files",
+    response_model=SourceFileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_file(
+    project_id: str,
+    file: UploadFile = File(...),
+    database: Session = Depends(get_db),
+) -> SourceFile:
+    project = get_project_or_404(project_id, database)
+    return await _upload_source_file(project, file, database, document_group_id=None)
+
+
+@router.post(
+    "/projects/{project_id}/files/{file_id}/replace",
+    response_model=SourceFileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def replace_file(
+    project_id: str,
+    file_id: str,
+    file: UploadFile = File(...),
+    database: Session = Depends(get_db),
+) -> SourceFile:
+    project = get_project_or_404(project_id, database)
+    statement = select(SourceFile).where(
+        SourceFile.id == file_id, SourceFile.project_id == project_id
+    )
+    previous = database.scalar(statement)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if previous.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Archived files cannot be replaced")
+    if previous.superseded_by_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This file has already been replaced by a newer version; "
+            "replace that version instead",
+        )
+    new_file = await _upload_source_file(
+        project, file, database, document_group_id=previous.document_group_id
+    )
+    previous.superseded_by_id = new_file.id
+    database.commit()
+    database.refresh(new_file)
+    return new_file
+
+
 @router.get("/projects/{project_id}/files", response_model=list[SourceFileResponse])
 def list_files(project_id: str, database: Session = Depends(get_db)) -> list[SourceFile]:
     get_project_or_404(project_id, database)
-    statement = select(SourceFile).where(
-        SourceFile.project_id == project_id, SourceFile.deleted_at.is_(None)
+    statement = (
+        select(SourceFile)
+        .where(SourceFile.project_id == project_id, SourceFile.deleted_at.is_(None))
+        .order_by(SourceFile.uploaded_at.desc())
     )
     return list(database.scalars(statement))
 
@@ -332,7 +394,11 @@ def list_processing_jobs(
     project_id: str, database: Session = Depends(get_db)
 ) -> list[ProcessingJob]:
     get_project_or_404(project_id, database)
-    statement = select(ProcessingJob).where(ProcessingJob.project_id == project_id)
+    statement = (
+        select(ProcessingJob)
+        .where(ProcessingJob.project_id == project_id)
+        .order_by(ProcessingJob.started_at.desc())
+    )
     return list(database.scalars(statement))
 
 
@@ -442,19 +508,31 @@ def create_site_model_revision(
     for existing in existing_revisions:
         if existing.source_job_ids == [extraction.processing_job_id]:
             return existing
-    current_revision = database.scalar(
-        select(func.max(ProjectRevision.revision_number)).where(
-            ProjectRevision.project_id == project_id
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        current_revision = database.scalar(
+            select(func.max(ProjectRevision.revision_number)).where(
+                ProjectRevision.project_id == project_id
+            )
         )
-    )
-    revision = ProjectRevision(
-        project_id=project.id,
-        revision_number=(current_revision or 0) + 1,
-        source_job_ids=[extraction.processing_job_id],
-        notes="Accepted from normalized extraction",
-    )
-    database.add(revision)
-    database.flush()
+        revision = ProjectRevision(
+            project_id=project.id,
+            revision_number=(current_revision or 0) + 1,
+            source_job_ids=[extraction.processing_job_id],
+            notes="Accepted from normalized extraction",
+        )
+        database.add(revision)
+        try:
+            database.flush()
+            break
+        except IntegrityError:
+            database.rollback()
+            if attempt == max_attempts - 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Could not accept this revision due to a concurrent accept in the "
+                    "same project; please retry.",
+                ) from None
     table_rows: list[dict[str, Any]] = []
     text_lines: list[str] = []
     text_source: dict[str, Any] | None = None
@@ -888,17 +966,65 @@ def _entity_payload(entity: SiteModelEntity) -> dict[str, Any]:
     }
 
 
+def _resolve_revision_ids(
+    project_id: str, requested: list[str] | None, database: Session
+) -> list[str]:
+    """Resolve which revisions to draw on: the explicitly requested ones, or
+    (by default) the project boundary — the single latest revision for each
+    distinct document lineage (document_group_id), so an older, superseded
+    version of a re-uploaded file never contributes alongside its replacement.
+    """
+    if requested:
+        return requested
+    revisions = list(
+        database.scalars(
+            select(ProjectRevision).where(ProjectRevision.project_id == project_id)
+        )
+    )
+    job_ids = [revision.source_job_ids[0] for revision in revisions if revision.source_job_ids]
+    jobs = (
+        {job.id: job for job in database.scalars(select(ProcessingJob).where(ProcessingJob.id.in_(job_ids)))}
+        if job_ids
+        else {}
+    )
+    file_ids = {job.source_file_id for job in jobs.values()}
+    files = (
+        {file.id: file for file in database.scalars(select(SourceFile).where(SourceFile.id.in_(file_ids)))}
+        if file_ids
+        else {}
+    )
+    latest_by_group: dict[str, ProjectRevision] = {}
+    for revision in revisions:
+        if not revision.source_job_ids:
+            continue
+        job = jobs.get(revision.source_job_ids[0])
+        source_file = files.get(job.source_file_id) if job else None
+        if source_file is None:
+            continue
+        group_id = source_file.document_group_id
+        current = latest_by_group.get(group_id)
+        # revision_number is unique and strictly increasing per project (see the
+        # 0010 migration), so it's a reliable tiebreaker where created_at alone
+        # can tie at second-level timestamp resolution.
+        if current is None or revision.revision_number > current.revision_number:
+            latest_by_group[group_id] = revision
+    return [revision.id for revision in latest_by_group.values()]
+
+
 @router.post("/projects/{project_id}/summaries", response_model=SummaryResponse)
 def create_summary(
-    project_id: str, revision_id: str | None = None, database: Session = Depends(get_db)
+    project_id: str,
+    revision_ids: list[str] | None = None,
+    database: Session = Depends(get_db),
 ) -> ProjectSummary:
     get_project_or_404(project_id, database)
+    resolved_ids = _resolve_revision_ids(project_id, revision_ids, database)
     entities = []
-    warnings = []
-    if revision_id:
+    warnings: list[str] = []
+    if resolved_ids:
         entities = list(
             database.scalars(
-                select(SiteModelEntity).where(SiteModelEntity.revision_id == revision_id)
+                select(SiteModelEntity).where(SiteModelEntity.revision_id.in_(resolved_ids))
             )
         )
         warnings = [
@@ -906,7 +1032,7 @@ def create_summary(
         ]
     entities_payload = [_entity_payload(entity) for entity in entities]
     content = MockAIProvider().summarize({"entities": entities_payload, "warnings": warnings})
-    summary = ProjectSummary(project_id=project_id, revision_id=revision_id, content=content)
+    summary = ProjectSummary(project_id=project_id, revision_ids=resolved_ids or None, content=content)
     database.add(summary)
     database.commit()
     database.refresh(summary)
@@ -919,11 +1045,12 @@ def ask_question(
 ) -> QuestionAnswer:
     get_project_or_404(project_id, database)
     intent = route_question(payload.question)
+    resolved_ids = _resolve_revision_ids(project_id, payload.revision_ids, database)
     entities_payload: list[dict[str, Any]] = []
-    if payload.revision_id:
+    if resolved_ids:
         entities = list(
             database.scalars(
-                select(SiteModelEntity).where(SiteModelEntity.revision_id == payload.revision_id)
+                select(SiteModelEntity).where(SiteModelEntity.revision_id.in_(resolved_ids))
             )
         )
         entities_payload = [_entity_payload(entity) for entity in entities]
@@ -932,7 +1059,7 @@ def ask_question(
     )
     question = QuestionAnswer(
         project_id=project_id,
-        revision_id=payload.revision_id,
+        revision_ids=resolved_ids or None,
         question=payload.question,
         intent=intent,
         answer=answer,
