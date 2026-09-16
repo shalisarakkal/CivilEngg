@@ -58,6 +58,14 @@ This file records decisions that affect the project direction. Add a date, conte
 - **Decision:** Render extracted geometry with a small custom SVG-based component (`GeometryPreview` in ProjectWorkspace.tsx) instead of adopting a map library. Likewise, use plain CSS instead of TailwindCSS, since the workspace UI's needs didn't justify adopting a utility-CSS framework.
 - **Consequence:** No basemap, tiling, panning/zooming, or geographic overlay support. If a future phase needs true geographic mapping (e.g. real-world basemaps, flood zone overlays per AGENTS.md), a map library would need to be introduced then.
 
+## ADR-008: MVP Scope Freeze for Release Candidate
+
+- **Status:** Accepted
+- **Date:** 2026-09-16
+- **Context:** Phase Z (PLAN.md) calls for freezing MVP scope and tagging a release candidate. Phases 0-11 and 13 are complete; Phase 12 (Activity Events) is explicitly logged as "not yet scoped" with open product decisions, and Phase 13's compression work item is explicitly optional and deferred.
+- **Decision:** The MVP release candidate is Phases 0-11 plus Phase 13's core work (purge history and archive auto-purge retention), on top of the earlier vertical slice (ADR-001). Phase 12 (Activity Events), Phase 13's optional compression item, and everything in the Post-MVP Roadmap (PLAN.md section 8) are explicitly out of scope for this release.
+- **Consequence:** The release candidate ships with the existing single-line status banner (no activity-event log) and without archive/project file compression. See DEPLOYMENT.md for how to run this release.
+
 ## Resolved (not full ADRs)
 
 - Database migration tool: Alembic (`backend/migrations/`).

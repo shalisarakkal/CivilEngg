@@ -6,6 +6,8 @@
     "dev": "cd frontend && next dev",
     "dev:backend": "cd backend && uv run uvicorn --app-dir src civil_engineering.main:app --reload",
     "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace frontend",
+    "start:backend": "cd backend && uv run uvicorn --app-dir src civil_engineering.main:app --host 127.0.0.1 --port 8000",
     "lint": "npm run lint --workspace frontend",
     "typecheck": "npm run typecheck --workspace frontend",
     "format:check": "cd backend && uv run ruff format --check .",

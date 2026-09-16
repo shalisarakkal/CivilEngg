@@ -873,7 +873,10 @@ def _table_row_point(row: dict[str, Any]) -> list[float] | None:
 
     x = find_value(("x", "easting", "longitude", "lon"))
     y = find_value(("y", "northing", "latitude", "lat"))
-    return [x, y] if x is not None and y is not None else None
+    if x is None or y is None:
+        return None
+    z = find_value(("elevation", "z"))
+    return [x, y, z] if z is not None else [x, y]
 
 
 @router.get(

@@ -78,6 +78,25 @@ Expected:
 - User: `civil_engineering`
 - A PostGIS version such as `3.6`
 
+Verify the `civil_engineering` role has `CREATEDB` (needed only to test
+`backend/scripts/restore.py` against a disposable scratch database — see
+DEPLOYMENT.md section 2 and 6 — not for normal application operation):
+
+```powershell
+& "S:\Program Files\PostgreSQL\18\bin\psql.exe" `
+  -h localhost `
+  -U civil_engineering `
+  -d civil_engineering `
+  -c "SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user;"
+```
+
+Expected: `t`. If it's `f`, grant it once as the `postgres` superuser:
+
+```powershell
+& "S:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -U postgres -d postgres `
+  -c "ALTER ROLE civil_engineering CREATEDB;"
+```
+
 Check the migration head:
 
 ```powershell

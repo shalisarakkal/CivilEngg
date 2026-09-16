@@ -377,23 +377,23 @@ Phase 6 lifecycle additions:
 
 **Work items:**
 
-- [ ] Freeze MVP scope and tag a release candidate
-- [ ] Provide local deployment instructions and sample configuration
-- [ ] Configure production database migrations and backup strategy
-- [ ] Define local-storage backup and restore procedures
-- [ ] Add deployment configuration for the selected frontend and backend hosts if needed
-- [ ] Configure environment secrets outside source control
-- [ ] Run a final smoke test against the deployed environment
-- [ ] Publish a short user guide for supported files, units, calculations, and limitations
-- [ ] Record post-MVP issues and prioritize the next release
+- [x] Freeze MVP scope — see DECISIONS.md ADR-008 (tagging itself is still pending the smoke test below and your approval)
+- [x] Provide local deployment instructions and sample configuration — see DEPLOYMENT.md
+- [x] Configure production database migrations and backup strategy — see DEPLOYMENT.md sections 6-7 and `backend/scripts/backup.py`/`restore.py`
+- [x] Define local-storage backup and restore procedures — captured together with the database (DEPLOYMENT.md section 6), since they must stay in sync
+- [x] Add deployment configuration for the selected frontend and backend hosts if needed — not applicable; the MVP is a single local machine per ADR-002/ADR-005 (see DEPLOYMENT.md section 1)
+- [x] Configure environment secrets outside source control — already enforced via `.gitignore`; see DEPLOYMENT.md section 4 for the checklist
+- [x] Run a final smoke test against the deployed environment — 2026-09-16: built and ran the actual production frontend (`npm run build`, `npm run start`) and backend (`npm run start:backend`, no `--reload`) against the real database, and exercised create/upload/process/accept-revision/ask end to end via the API. Surfaced and fixed a real bug along the way (CSV point elevation was dropped, see RISK_REGISTER.md) and found an open gap (perimeter/area questions aren't routed, see RISK_REGISTER.md), both logged. Not yet done: a pass through the UI itself in a browser rather than the API directly
+- [x] Publish a short user guide for supported files, units, calculations, and limitations — see USER_GUIDE.md
+- [x] Record post-MVP issues and prioritize the next release — see section 8 below
 
 **Exit criteria:**
 
-- [ ] The MVP is running in the target environment
-- [ ] A new project can be created and processed end to end
-- [ ] Backups and recovery steps have been tested
-- [ ] Deployment, configuration, and rollback steps are documented
-- [ ] The server is left running and ready for user acceptance testing
+- [x] The MVP is running in the target environment — production frontend (`npm run start`) and backend (`npm run start:backend`) running locally as of 2026-09-16
+- [x] A new project can be created and processed end to end — verified via the smoke test above
+- [x] Backups and recovery steps have been tested — verified 2026-09-16 against a real backup restored into a disposable scratch database/storage directory (see DEPLOYMENT.md section 6)
+- [x] Deployment, configuration, and rollback steps are documented — see DEPLOYMENT.md
+- [x] The server is left running and ready for user acceptance testing — production frontend/backend left running on ports 3000/8000 after the smoke test
 
 ## 5. Testing Strategy
 
@@ -473,6 +473,26 @@ These are logical boundaries; exact routes and schemas should be finalized durin
 - [ ] Local setup, storage, backup, limitations, and deployment instructions are documented
 
 ## 8. Post-MVP Roadmap
+
+**Nearest-term, ahead of the numbered list below** (per ADR-008's scope
+freeze):
+
+1. **Phase 12 - Activity Events** (PLAN.md, not yet scoped): highest
+   priority of anything deferred from this release — it's the direct fix
+   for a real reported failure (a multi-file batch outcome silently lost
+   because a later action overwrote the single-line status banner), not
+   a speculative improvement.
+2. **Wire perimeter and area into the question router** (`route_question`
+   in ai_service.py): found via the Phase Z final smoke test — both
+   calculations already work through `/calculations` directly, they're
+   just unreachable by asking a question about them. See RISK_REGISTER.md.
+3. **Phase 13 optional - archive/project file compression**: lowest
+   urgency of the deferred work — no reported pain point yet, and
+   project-level compression is a bigger change than file-level since
+   project archival doesn't touch storage at all today.
+
+Everything below is unprioritized relative to each other and to the
+items above:
 
 1. Expand CAD support to DWG and richer Civil 3D entities.
 2. Improve PDF plan-set vision, OCR, title-block, viewport, and callout extraction.

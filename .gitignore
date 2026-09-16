@@ -24,6 +24,7 @@ data/
 storage/
 uploads/
 generated/
+backups/
 
 # Test and coverage output
 coverage/

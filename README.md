@@ -20,12 +20,14 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 ## Documentation
 
 - [Requirements.md](Requirements.md) - product capabilities and input requirements
+- [USER_GUIDE.md](USER_GUIDE.md) - what the application does, for someone using it
 - [PLAN.md](PLAN.md) - development phases and definition of done
 - [ARCHITECTURE.md](ARCHITECTURE.md) - system structure and processing flow
 - [DATA_MODEL.md](DATA_MODEL.md) - initial entities and relationships
 - [API.md](API.md) - initial API contract
 - [TESTING.md](TESTING.md) - testing strategy
 - [VERIFY.md](VERIFY.md) - manual verification runbook
+- [DEPLOYMENT.md](DEPLOYMENT.md) - running a standing local deployment, backups, and restore
 - [RISK_REGISTER.md](RISK_REGISTER.md) - MVP risks and mitigations
 - [DECISIONS.md](DECISIONS.md) - recorded technical decisions
 - [CHANGELOG.md](CHANGELOG.md) - notable project changes
