@@ -379,6 +379,7 @@ def parse_dxf(data: str, file_name: str) -> NormalizedDocument:
 
 
 _LANDXML_POINT_TAGS = {"CgPoint", "P"}
+_LANDXML_CURVE_CHILD_TAGS = {"InSpiral", "OutSpiral", "Curve1", "Curve2"}
 
 
 def parse_landxml(data: str, file_name: str) -> NormalizedDocument:
@@ -390,40 +391,95 @@ def parse_landxml(data: str, file_name: str) -> NormalizedDocument:
         raise ExtractionError("File is not a LandXML document")
 
     document = NormalizedDocument(parser_name="landxml")
+    point_index = _landxml_point_index(root)
+    unresolved_point_refs: set[str] = set()
     for element in root.iter():
         tag = _local_tag(element)
         if tag not in _LANDXML_POINT_TAGS:
             continue
-        coordinates = _landxml_coordinates(element.text)
+        coordinates = _landxml_child_point(element, point_index)
         if coordinates is None:
-            document.warnings.append(
-                f"Skipped {tag} with missing or unparsable coordinates: {element.text!r}"
-            )
+            pnt_ref = element.get("pntRef")
+            if pnt_ref:
+                unresolved_point_refs.add(pnt_ref)
+            else:
+                document.warnings.append(
+                    f"Skipped {tag} with missing or unparsable coordinates: {element.text!r}"
+                )
             continue
         point_id = element.get("name") or element.get("id") or ""
         source = SourceReference(file_name=file_name, entity_type=tag, entity_id=point_id)
         document.items.append(NormalizedItem("point", {"point": coordinates}, source))
 
+    if unresolved_point_refs:
+        document.warnings.append(
+            f"{len(unresolved_point_refs)} point reference(s) (pntRef) could not be resolved "
+            f"to a defined point: {', '.join(sorted(unresolved_point_refs)[:10])}"
+            + ("..." if len(unresolved_point_refs) > 10 else "")
+        )
+
     for alignment in root.iter():
         if _local_tag(alignment) != "Alignment":
             continue
-        _extract_landxml_alignment(alignment, file_name, document)
+        name = alignment.get("name", "")
+        _extract_landxml_coord_geom_lines(
+            alignment, "Alignment", name, "alignment_line", file_name, document, point_index
+        )
+        _extract_landxml_align_pis(alignment, name, file_name, document)
+
+    for parcel in root.iter():
+        if _local_tag(parcel) != "Parcel":
+            continue
+        name = parcel.get("name", "")
+        _extract_landxml_coord_geom_lines(
+            parcel, "Parcel", name, "parcel_line", file_name, document, point_index
+        )
 
     point_count = sum(1 for item in document.items if item.item_type == "point")
     line_count = sum(1 for item in document.items if item.item_type == "line")
     if point_count == 0 and line_count == 0:
         raise ExtractionError(
-            "LandXML file contains no supported CgPoints, surface points, or alignment lines"
+            "LandXML file contains no supported CgPoints, surface points, alignment "
+            "geometry (CoordGeom or AlignPIs), or parcel boundaries"
         )
     document.metadata = {"point_count": point_count, "alignment_line_count": line_count}
     return document
 
 
-def _extract_landxml_alignment(
-    alignment: ElementTree.Element, file_name: str, document: NormalizedDocument
+def _landxml_point_index(root: ElementTree.Element) -> dict[str, list[float]]:
+    """Map every named CgPoint/P to its coordinates, for resolving pntRef references."""
+    index: dict[str, list[float]] = {}
+    for element in root.iter():
+        if _local_tag(element) not in _LANDXML_POINT_TAGS:
+            continue
+        coordinates = _landxml_coordinates(element.text)
+        if coordinates is None:
+            continue
+        point_id = element.get("name") or element.get("id")
+        if point_id:
+            index[point_id] = coordinates
+    return index
+
+
+def _landxml_child_point(
+    child: ElementTree.Element, point_index: dict[str, list[float]]
+) -> list[float] | None:
+    pnt_ref = child.get("pntRef")
+    if pnt_ref:
+        return point_index.get(pnt_ref)
+    return _landxml_coordinates(child.text)
+
+
+def _extract_landxml_coord_geom_lines(
+    container: ElementTree.Element,
+    kind: str,
+    name: str,
+    entity_type: str,
+    file_name: str,
+    document: NormalizedDocument,
+    point_index: dict[str, list[float]],
 ) -> None:
-    name = alignment.get("name", "")
-    for coord_geom in alignment:
+    for coord_geom in container:
         if _local_tag(coord_geom) != "CoordGeom":
             continue
         for index, segment in enumerate(coord_geom, start=1):
@@ -433,30 +489,99 @@ def _extract_landxml_alignment(
                 for child in segment:
                     child_tag = _local_tag(child)
                     if child_tag == "Start":
-                        start = _landxml_coordinates(child.text)
+                        start = _landxml_child_point(child, point_index)
                     elif child_tag == "End":
-                        end = _landxml_coordinates(child.text)
+                        end = _landxml_child_point(child, point_index)
                 if start is None or end is None:
                     document.warnings.append(
-                        f"Alignment '{name}' segment {index} (Line) is missing Start/End "
-                        "coordinates"
+                        f"{kind} '{name}' segment {index} (Line) is missing or unresolved "
+                        "Start/End coordinates"
                     )
                     continue
                 source = SourceReference(
                     file_name=file_name,
-                    entity_type="alignment_line",
+                    entity_type=entity_type,
                     entity_id=f"{name}:{index}",
                 )
                 document.items.append(NormalizedItem("line", {"start": start, "end": end}, source))
             elif segment_tag in {"Curve", "Spiral"}:
                 document.warnings.append(
-                    f"Alignment '{name}' segment {index} ({segment_tag}) was not extracted: "
-                    "curved alignment geometry is not supported, only straight Line segments"
+                    f"{kind} '{name}' segment {index} ({segment_tag}) was not extracted: "
+                    "curved geometry is not supported, only straight Line segments"
                 )
+
+
+def _extract_landxml_align_pis(
+    alignment: ElementTree.Element, name: str, file_name: str, document: NormalizedDocument
+) -> None:
+    """Extract PI points and straight tangent-to-tangent segments from an AlignPIs block.
+
+    A segment between two consecutive PIs is only emitted when neither PI has a curve or
+    spiral: a curve/spiral at a PI means the real alignment cuts the corner there, so a
+    straight line to/from that PI's literal coordinates would not match the actual path.
+    """
+    for align_pis in alignment:
+        if _local_tag(align_pis) != "AlignPIs":
+            continue
+        pis: list[tuple[list[float], bool]] = []
+        for pi_index, align_pi in enumerate(align_pis, start=1):
+            if _local_tag(align_pi) != "AlignPI":
+                continue
+            point_text = None
+            has_curve = False
+            for child in align_pi:
+                child_tag = _local_tag(child)
+                if child_tag == "PI":
+                    point_text = child.text
+                elif child_tag in _LANDXML_CURVE_CHILD_TAGS:
+                    has_curve = True
+            coordinates = _landxml_coordinates(point_text)
+            if coordinates is None:
+                document.warnings.append(
+                    f"Alignment '{name}' AlignPI {pi_index} is missing or unparsable PI coordinates"
+                )
+                continue
+            source = SourceReference(
+                file_name=file_name, entity_type="align_pi", entity_id=f"{name}:{pi_index}"
+            )
+            document.items.append(NormalizedItem("point", {"point": coordinates}, source))
+            pis.append((coordinates, has_curve))
+
+        for index in range(len(pis) - 1):
+            start, start_curved = pis[index]
+            end, end_curved = pis[index + 1]
+            if start_curved or end_curved:
+                document.warnings.append(
+                    f"Alignment '{name}' PI segment {index + 1}-{index + 2} was not "
+                    "extracted: a curve or spiral transitions through one of its "
+                    "endpoints, so a straight line would not match the actual alignment"
+                )
+                continue
+            source = SourceReference(
+                file_name=file_name, entity_type="align_pi_line", entity_id=f"{name}:{index + 1}"
+            )
+            document.items.append(NormalizedItem("line", {"start": start, "end": end}, source))
 
 
 def _local_tag(element: ElementTree.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
+
+
+def _landxml_number(part: str) -> float | None:
+    try:
+        return float(part)
+    except ValueError:
+        pass
+    # Some producers (e.g. German-locale CAD tools) write decimal numbers with a
+    # comma separator instead of a period. Only reinterpret it as a decimal point
+    # when there's exactly one comma and no period, so a thousands-separated or
+    # already-standard number is never silently reinterpreted.
+    if part.count(",") == 1 and "." not in part:
+        try:
+            return float(part.replace(",", "."))
+        except ValueError:
+            return None
+    return None
 
 
 def _landxml_coordinates(text: str | None) -> list[float] | None:
@@ -465,9 +590,8 @@ def _landxml_coordinates(text: str | None) -> list[float] | None:
     parts = text.split()
     if len(parts) not in (2, 3):
         return None
-    try:
-        values = [float(part) for part in parts]
-    except ValueError:
+    values = [_landxml_number(part) for part in parts]
+    if any(value is None for value in values):
         return None
     # LandXML coordinate order is northing, easting, [elevation]; convert to this
     # app's (x=easting, y=northing, [z=elevation]) convention used everywhere else.

@@ -178,6 +178,107 @@ def test_landxml_parser_extracts_points_and_alignment_lines() -> None:
     assert any("Curve" in warning for warning in document.warnings)
 
 
+def test_landxml_parser_accepts_comma_decimal_coordinates() -> None:
+    data = """<?xml version="1.0"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.1">
+  <CgPoints>
+    <CgPoint name="1">3394639,42776972 5580312,09152585 184,95</CgPoint>
+    <CgPoint name="2">3394643,238154 5580331,58458437 184,76196</CgPoint>
+  </CgPoints>
+</LandXML>
+"""
+    document = parse_landxml(data, "cross_section_points.xml")
+    assert document.warnings == []
+    points = [item for item in document.items if item.item_type == "point"]
+    assert {tuple(item.value["point"]) for item in points} == {
+        (5580312.09152585, 3394639.42776972, 184.95),
+        (5580331.58458437, 3394643.238154, 184.76196),
+    }
+
+
+def test_landxml_parser_extracts_align_pis_and_skips_curved_segments() -> None:
+    data = """<?xml version="1.0"?>
+<LandXML>
+  <Alignments>
+    <Alignment name="Test Rd">
+      <AlignPIs>
+        <AlignPI><PI>1000.00 5000.00</PI></AlignPI>
+        <AlignPI><PI>1000.00 5100.00</PI><InSpiral/><Curve1/><OutSpiral/></AlignPI>
+        <AlignPI><PI>1000.00 5200.00</PI></AlignPI>
+        <AlignPI><PI>1000.00 5300.00</PI></AlignPI>
+      </AlignPIs>
+    </Alignment>
+  </Alignments>
+</LandXML>
+"""
+    document = parse_landxml(data, "road.xml")
+    points = [item for item in document.items if item.item_type == "point"]
+    lines = [item for item in document.items if item.item_type == "line"]
+    assert len(points) == 4
+    assert {item.source.entity_type for item in points} == {"align_pi"}
+
+    # Only the PI-3-to-PI-4 segment has neither endpoint curved.
+    assert len(lines) == 1
+    assert lines[0].value == {"start": [5200.0, 1000.0], "end": [5300.0, 1000.0]}
+    assert lines[0].source.entity_type == "align_pi_line"
+    assert sum("was not extracted" in warning for warning in document.warnings) == 2
+
+
+def test_landxml_parser_resolves_pntref_and_extracts_parcel_boundaries() -> None:
+    data = """<?xml version="1.0"?>
+<LandXML>
+  <CgPoints>
+    <CgPoint name="A">1000.00 5000.00</CgPoint>
+    <CgPoint name="B">1000.00 5100.00</CgPoint>
+  </CgPoints>
+  <Parcels>
+    <Parcel name="Lot1">
+      <CoordGeom>
+        <Line>
+          <Start pntRef="A"/>
+          <End pntRef="B"/>
+        </Line>
+        <Line>
+          <Start pntRef="A"/>
+          <End>1000.00 5200.00</End>
+        </Line>
+      </CoordGeom>
+    </Parcel>
+  </Parcels>
+</LandXML>
+"""
+    document = parse_landxml(data, "plat.xml")
+    lines = [item for item in document.items if item.item_type == "line"]
+    assert len(lines) == 2
+    assert all(item.source.entity_type == "parcel_line" for item in lines)
+    assert lines[0].value == {"start": [5000.0, 1000.0], "end": [5100.0, 1000.0]}
+    # A pntRef and an inline coordinate can both appear on the same Line.
+    assert lines[1].value == {"start": [5000.0, 1000.0], "end": [5200.0, 1000.0]}
+    assert document.warnings == []
+
+
+def test_landxml_parser_resolves_point_level_pntref_and_consolidates_unresolved_refs() -> None:
+    data = """<?xml version="1.0"?>
+<LandXML>
+  <CgPoints>
+    <CgPoint name="1" code="GRND">1000.00 5000.00</CgPoint>
+    <CgPoint pntRef="1"></CgPoint>
+    <CgPoint pntRef="missing-a"></CgPoint>
+    <CgPoint pntRef="missing-b"></CgPoint>
+  </CgPoints>
+</LandXML>
+"""
+    document = parse_landxml(data, "features.xml")
+    points = [item for item in document.items if item.item_type == "point"]
+    # The real point plus its resolved reference; the two unresolvable refs are skipped.
+    assert len(points) == 2
+    assert all(item.value["point"] == [5000.0, 1000.0] for item in points)
+    assert len(document.warnings) == 1
+    assert "2 point reference(s)" in document.warnings[0]
+    assert "missing-a" in document.warnings[0]
+    assert "missing-b" in document.warnings[0]
+
+
 def test_landxml_parser_rejects_malformed_or_non_landxml_input() -> None:
     with pytest.raises(ExtractionError, match="LandXML could not be read"):
         parse_landxml("not xml", "broken.xml")
