@@ -178,7 +178,7 @@ test.describe("project workspace", () => {
     ]);
     await page.getByRole("button", { name: "Upload files" }).click();
 
-    await expect(page.getByText("2 file(s) uploaded and queued for processing.")).toBeVisible();
+    await expect(page.locator(".message").getByText("2 file(s) uploaded and queued for processing.")).toBeVisible();
     await expect(page.getByText("survey-1.csv")).toBeVisible();
     await expect(page.getByText("survey-2.csv")).toBeVisible();
   });
@@ -316,15 +316,107 @@ test.describe("project workspace", () => {
     await page.getByRole("button", { name: "Archive selected" }).click();
     await page.getByRole("button", { name: "Archive files" }).click();
 
-    await expect(page.getByText("1 of 2 file(s) archived, 1 failed.")).toBeVisible();
+    await expect(page.locator(".message").getByText("1 of 2 file(s) archived, 1 failed.")).toBeVisible();
     await expect(page.getByText("survey-1.csv", { exact: true })).not.toBeVisible();
     await expect(page.getByText("survey-2.csv", { exact: true })).toBeVisible();
 
     // The short summary hides the per-file breakdown behind a "Show details" toggle.
     await expect(page.locator(".batch-details")).toHaveCount(0);
-    await page.getByRole("button", { name: "Show details" }).click();
+    await page.locator(".message").getByRole("button", { name: "Show details" }).click();
     await expect(page.locator(".batch-details-group", { hasText: "Successful" })).toContainText("survey-1.csv");
     await expect(page.locator(".batch-details-group", { hasText: "Failed" })).toContainText("survey-2.csv — File is already archived");
+
+    // The same outcome is also preserved in the persistent activity log, so
+    // a later unrelated action overwriting the banner doesn't lose it.
+    await expect(page.locator(".activity-log")).toContainText("1 of 2 file(s) archived, 1 failed.");
+  });
+
+  test("activity log: a batch outcome survives an unrelated action overwriting the status banner", async ({ page }) => {
+    const filesById: Record<string, unknown> = {
+      "file-1": {
+        id: "file-1",
+        project_id: PROJECT.id,
+        original_name: "survey-1.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "a".repeat(64),
+        status: "queued",
+        uploaded_at: "2026-01-01T00:00:00Z",
+        processed_at: null,
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-1",
+        superseded_by_id: null,
+      },
+      "file-2": {
+        id: "file-2",
+        project_id: PROJECT.id,
+        original_name: "survey-2.csv",
+        media_type: "text/csv",
+        size_bytes: 20,
+        checksum: "b".repeat(64),
+        status: "queued",
+        uploaded_at: "2026-01-02T00:00:00Z",
+        processed_at: null,
+        error_message: null,
+        deleted_at: null,
+        document_group_id: "file-2",
+        superseded_by_id: null,
+      },
+    };
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() === "GET") return json(route, Object.values(filesById));
+      return route.continue();
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/files/file-1/process`, (route) => json(route, { id: "job-1", status: "processing" }, 201));
+    await page.route(`${API}/projects/${PROJECT.id}/files/file-2/process`, (route) => json(route, { detail: "Archived files cannot be processed" }, 409));
+    await page.route(`${API}/projects/${PROJECT.id}/calculations`, async (route) => {
+      if (route.request().method() === "POST") {
+        return json(
+          route,
+          {
+            id: "calc-1",
+            project_id: PROJECT.id,
+            revision_id: null,
+            calculation_type: "slope",
+            input_entity_ids: null,
+            inputs: { start_elevation: 100, end_elevation: 104, horizontal_distance: 100 },
+            formula: "(change in elevation / horizontal distance) * 100",
+            result: 4,
+            unit: "percent",
+            assumptions: ["Distance input is measured in ft"],
+            details: null,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+          201,
+        );
+      }
+      return json(route, []);
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("survey-1.csv")).toBeVisible();
+
+    const rows = page.locator(".file-row");
+    await rows.nth(0).locator('input[type="checkbox"]').check();
+    await rows.nth(1).locator('input[type="checkbox"]').check();
+    await page.getByRole("button", { name: "Process selected" }).click();
+
+    await expect(page.locator(".message").getByText("1 of 2 file(s) processed, 1 failed.")).toBeVisible();
+
+    // A later, unrelated action overwrites the status banner, same as the
+    // reported case (processing many files, then running a calculation).
+    await page.getByRole("button", { name: "Run calculation" }).click();
+    await expect(page.locator(".message").getByText("slope calculation completed.")).toBeVisible();
+    await expect(page.locator(".message").getByText("1 of 2 file(s) processed, 1 failed.")).not.toBeVisible();
+
+    // The processing outcome is still recoverable from the activity log.
+    const activityEntry = page.locator(".activity-entry", { hasText: "1 of 2 file(s) processed, 1 failed." });
+    await expect(activityEntry).toBeVisible();
+    await activityEntry.getByRole("button", { name: "Show details" }).click();
+    await expect(activityEntry.locator(".batch-details-group", { hasText: "Successful" })).toContainText("survey-1.csv");
+    await expect(activityEntry.locator(".batch-details-group", { hasText: "Failed" })).toContainText("survey-2.csv — Archived files cannot be processed");
   });
 
   test("calculation state: running a calculation renders its result", async ({ page }) => {
