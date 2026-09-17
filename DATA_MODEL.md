@@ -76,6 +76,8 @@
 
 `content` is the full normalized document (text, items, warnings, metadata) that a parser produced, stored as JSON. This is what `POST .../site-model/revisions/from-extraction/{file_id}` reads to build `SiteModelEntity` rows for a revision.
 
+`(source_file_id, revision_number)` is unique at the database level, the same guarantee `ProjectRevision` has below — reprocessing a file (e.g. via "Retry") assigns the next `revision_number` for that file rather than leaving it at a fixed value, so which extraction is "latest" is never ambiguous.
+
 ### ProjectRevision
 
 - `id`

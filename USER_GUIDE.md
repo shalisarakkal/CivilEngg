@@ -46,6 +46,8 @@ used.
 - **Slope** — `slope = (change in elevation / horizontal distance) * 100`,
   with direction and percent-vs-ratio labeling.
 - **Area** — parcel area and basic geometry measurements.
+- **Perimeter** — the total boundary length of a line or polygon (a circle
+  uses `2 * pi * radius` instead).
 
 Calculations only run against an **accepted revision** of a project's
 site model, not against a file that has only been processed.
@@ -57,10 +59,11 @@ site model, not against a file that has only been processed.
   summary you generate is kept (not overwritten) in a history list on
   the project, so past summaries remain available after generating a
   new one.
-- Asking a question routes anything computable to the deterministic
-  calculation engine first; anything else is answered from retrieved
-  source text, or with an explicit insufficient-data/ambiguous response
-  rather than a guess.
+- Asking a question routes anything computable — distance/setback, slope,
+  elevation, area, perimeter, or a directional question ("the setback to
+  the north property line") — to the deterministic calculation engine
+  first; anything else is answered from retrieved source text, or with an
+  explicit insufficient-data/ambiguous response rather than a guess.
 - The AI layer is currently a deterministic mock that makes no network
   calls (see DECISIONS.md ADR-006) — answers are limited to what the
   site model and extracted text can actually support.
