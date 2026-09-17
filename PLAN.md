@@ -537,6 +537,8 @@ items above:
    the Python backend, and either bundle PostgreSQL/PostGIS per OS or
    switch to an embedded database (e.g. SQLite+SpatiaLite) the
    calculation engine and tests would need to be re-verified against.
+   This item is also what would replace [CLIENT_INSTALL.md](CLIENT_INSTALL.md)'s
+   manual, interim client-site install procedure with a single installer.
 
 ## 9. Nice-to-Have Improvements
 

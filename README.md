@@ -28,6 +28,7 @@ See [PLAN.md](PLAN.md) for phases and acceptance criteria.
 - [TESTING.md](TESTING.md) - testing strategy
 - [VERIFY.md](VERIFY.md) - manual verification runbook
 - [DEPLOYMENT.md](DEPLOYMENT.md) - running a standing local deployment, backups, and restore
+- [CLIENT_INSTALL.md](CLIENT_INSTALL.md) - manual install procedure for a fresh client-site machine (interim, until a packaged installer exists)
 - [RISK_REGISTER.md](RISK_REGISTER.md) - MVP risks and mitigations
 - [DECISIONS.md](DECISIONS.md) - recorded technical decisions
 - [CHANGELOG.md](CHANGELOG.md) - notable project changes
