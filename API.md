@@ -90,11 +90,12 @@ Geometry calculation requests include both `coordinate_unit` and output `unit`. 
 ## Summaries and Questions
 
 - `POST /projects/{project_id}/summaries` - generate a site summary
+- `GET /projects/{project_id}/summaries` - list past summaries, most recent first
 - `POST /projects/{project_id}/questions` - ask a source-grounded question
 
 Both accept an optional `revision_ids` list (query params for `summaries`, a JSON body field for `questions`) naming which revisions to draw on. When omitted, it resolves to the project-boundary default: the single latest revision for each distinct document lineage (`SourceFile.document_group_id`) across the whole project, so a superseded (replaced) file's older revision is excluded automatically. The response's `revision_ids` records exactly what was resolved, for provenance.
 
-There is no list route for summaries or past questions; the frontend keeps them in local state as they're created within a session.
+Summaries are persisted server-side and listable (above). There is no list route for past questions; the frontend keeps question/answer history in local state as it's created within a session.
 
 The current implementation uses a deterministic mock provider. Unsupported questions return insufficient-data responses rather than invented engineering facts.
 

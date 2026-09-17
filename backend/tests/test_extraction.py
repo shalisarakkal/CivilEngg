@@ -114,6 +114,24 @@ def test_dxf_parser_extracts_entities_and_layers(tmp_path: Path) -> None:
     assert any(item.item_type == "line" for item in document.items)
 
 
+def test_dxf_text_is_scanned_for_key_phrases(tmp_path: Path) -> None:
+    # Regression test: DXF TEXT content was stored as a plain "text" item but,
+    # unlike parse_text/parse_pdf, was never scanned for key phrases -- the
+    # same wording on a DXF annotation was silently less searchable than on a
+    # PDF or TXT page.
+    drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]
+    modelspace = drawing.modelspace()
+    modelspace.add_text("25' REAR SETBACK", dxfattribs={"layer": "ANNOTATIONS"})
+    path = tmp_path / "annotated.dxf"
+    drawing.saveas(path)
+
+    document = parse_file(path, "annotated.dxf")
+    key_phrases = [item for item in document.items if item.item_type == "key_phrase"]
+    assert len(key_phrases) == 1
+    assert key_phrases[0].value == {"phrase": "setback", "context": "25' REAR SETBACK"}
+    assert key_phrases[0].source.layer == "ANNOTATIONS"
+
+
 def test_tiff_parser_extracts_raster_metadata(tmp_path: Path) -> None:
     path = tmp_path / "survey.tif"
     Image.new("L", (640, 480), color=255).save(path, format="TIFF")

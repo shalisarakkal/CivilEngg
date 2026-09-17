@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from civil_engineering import storage
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
-from civil_engineering.models import ProcessingJob, SourceFile
+from civil_engineering.models import ExtractedDocument, ProcessingJob, SourceFile
 
 
 def _client(tmp_path: Path, monkeypatch: MonkeyPatch) -> TestClient:
@@ -103,6 +103,63 @@ def test_malformed_pdf_fails_gracefully_without_crashing_the_server(
 
         # The server must still be responsive after a parser failure.
         assert client.get("/health").status_code == 200
+    finally:
+        _teardown()
+
+
+def test_reprocessing_a_file_produces_a_correctly_ordered_new_extraction(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test: ExtractedDocument.revision_number previously always
+    # defaulted to 1 and was never incremented, so reprocessing the same file
+    # (e.g. via the UI's "Retry" action) created a second row tied at
+    # revision_number=1 with the first. GET .../extraction orders solely by
+    # revision_number, so which of the two tied rows it returned was left to
+    # unspecified database tie-break order rather than actual recency.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        project = client.post("/projects", json={"name": "Reprocess Site"}).json()
+        uploaded = client.post(
+            f"/projects/{project['id']}/files",
+            files={"file": ("survey.txt", b"first version", "text/plain")},
+        ).json()
+
+        first = client.post(f"/projects/{project['id']}/files/{uploaded['id']}/process")
+        assert first.status_code == 201
+        assert first.json()["status"] == "completed"
+
+        # Overwrite the stored file on disk (as a real edit-and-retry would
+        # produce different content) before reprocessing the same file id.
+        db_gen = app.dependency_overrides[get_db]()
+        database = next(db_gen)
+        source_file = database.get(SourceFile, uploaded["id"])
+        assert source_file is not None
+        Path(source_file.stored_path).write_bytes(b"second version")
+        database.close()
+
+        second = client.post(f"/projects/{project['id']}/files/{uploaded['id']}/process")
+        assert second.status_code == 201
+        assert second.json()["status"] == "completed"
+
+        db_gen2 = app.dependency_overrides[get_db]()
+        database2 = next(db_gen2)
+        extractions = sorted(
+            database2.query(ExtractedDocument)
+            .filter(ExtractedDocument.source_file_id == uploaded["id"])
+            .all(),
+            key=lambda row: row.created_at,
+        )
+        database2.close()
+        assert len(extractions) == 2
+        # The two extractions must be numbered 1 and 2, not tied at 1.
+        assert {extraction.revision_number for extraction in extractions} == {1, 2}
+        assert extractions[0].revision_number == 1
+        assert extractions[1].revision_number == 2
+
+        extraction = client.get(
+            f"/projects/{project['id']}/files/{uploaded['id']}/extraction"
+        ).json()
+        assert "second version" in extraction["content"]["text"]
     finally:
         _teardown()
 

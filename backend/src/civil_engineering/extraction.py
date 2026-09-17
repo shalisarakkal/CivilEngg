@@ -362,12 +362,28 @@ def parse_dxf(data: str, file_name: str) -> NormalizedDocument:
         if entity_type == "LINE":
             value = {"start": list(entity.dxf.start), "end": list(entity.dxf.end)}
         elif entity_type == "LWPOLYLINE":
-            value = {"points": [list(point[:2]) for point in entity_any.get_points()]}
+            points = [list(point[:2]) for point in entity_any.get_points()]
+            # LWPOLYLINE's "closed" flag marks a ring without duplicating the
+            # first vertex as the last; without this, a closed polyline (e.g. a
+            # building footprint or parcel boundary) is indistinguishable from
+            # an open path and becomes a LineString instead of a Polygon in
+            # site_model.py's _geometry_from_value.
+            if entity_any.closed and points and points[0] != points[-1]:
+                points = [*points, points[0]]
+            value = {"points": points}
         elif entity_type == "POINT":
             value = {"point": list(entity.dxf.location)}
         elif entity_type == "TEXT":
             value = {"text": entity.dxf.text, "location": list(entity.dxf.insert)}
             document.text.append(entity.dxf.text)
+            # Unlike parse_text/parse_pdf, DXF TEXT content wasn't scanned for
+            # key phrases at all, so identical wording (e.g. "25' REAR SETBACK")
+            # was silently surfaced from a PDF/TXT source but not from a DXF one.
+            stripped = entity.dxf.text.strip()
+            for phrase in _find_key_phrases(stripped):
+                document.items.append(
+                    NormalizedItem("key_phrase", {"phrase": phrase, "context": stripped}, source)
+                )
         elif entity_type == "DIMENSION":
             value = {"text": entity.dxf.get("text", "")}
         else:

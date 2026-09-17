@@ -326,7 +326,10 @@ def _entity_centroid(entity: dict[str, Any]) -> tuple[float, float] | None:
         xs, ys = zip(*[(point[0], point[1]) for point in coordinates], strict=True)
         return (sum(xs) / len(xs), sum(ys) / len(ys))
     if geom_type == "Polygon":
-        ring = coordinates[0]
+        # GeoJSON/Shapely rings repeat the first point as the last to close the
+        # ring; drop it so the average isn't skewed by double-counting that
+        # one vertex.
+        ring = coordinates[0][:-1]
         xs, ys = zip(*[(point[0], point[1]) for point in ring], strict=True)
         return (sum(xs) / len(xs), sum(ys) / len(ys))
     return None

@@ -781,4 +781,119 @@ test.describe("project workspace", () => {
     await expect(fileRow).toContainText("Auto-deletes in 5 days");
     await expect(fileRow.locator(".purge-countdown-warning")).toHaveCount(1);
   });
+
+  test("site intelligence: switching projects clears a selected revision-scope filter", async ({ page }) => {
+    // Regression test: qaRevisionIds (the "Scope" checkboxes limiting a
+    // summary/question to specific revisions) was never reset on project
+    // switch, so a scope selected in one project was silently sent as-is to a
+    // different project's questions/summaries endpoint.
+    const PROJECT_B = { ...PROJECT, id: "22222222-2222-2222-2222-222222222222", name: "Maple Ave Site" };
+    await mockBaseline(page, [PROJECT, PROJECT_B]);
+    const REVISION_A = { id: "rev-a", revision_number: 1, created_at: "2026-01-01T00:00:00Z", source_job_ids: [], notes: null };
+    const REVISION_B = { id: "rev-b", revision_number: 1, created_at: "2026-01-01T00:00:00Z", source_job_ids: [], notes: null };
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) => json(route, [REVISION_A]));
+    await page.route(`${API}/projects/${PROJECT_B.id}/site-model/revisions`, (route) => json(route, [REVISION_B]));
+
+    let capturedBody: { question: string; revision_ids: string[] | null } | null = null;
+    await page.route(`${API}/projects/${PROJECT_B.id}/questions`, async (route) => {
+      capturedBody = route.request().postDataJSON();
+      return json(route, {
+        id: "q-1",
+        project_id: PROJECT_B.id,
+        revision_ids: null,
+        question: "What is the setback distance?",
+        intent: "distance",
+        answer: { answer: "Insufficient data to answer this question.", method: "mock", source_references: [], limitations: [], confidence: 0 },
+        created_at: "2026-01-01T00:00:00Z",
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    // Select Project A's only revision as the scope.
+    await page.locator(".qa-scope-option").getByRole("checkbox").check();
+    await expect(page.getByText("Selected revisions only.")).toBeVisible();
+
+    // Switch to Project B, which has a different revision (rev-b), and ask a
+    // question without touching the scope controls there.
+    await page.locator(".project-list").getByText(PROJECT_B.name).click();
+    await expect(page.getByRole("heading", { name: PROJECT_B.name })).toBeVisible();
+    await expect(page.getByText("Whole project (every accepted document's latest revision).")).toBeVisible();
+
+    await page.getByPlaceholder("What is the setback distance?").fill("What is the setback distance?");
+    await page.getByRole("button", { name: "Ask" }).click();
+    await expect.poll(() => capturedBody).not.toBeNull();
+    // Must not still be carrying Project A's revision id ("rev-a").
+    expect(capturedBody).toEqual({ question: "What is the setback distance?", revision_ids: null });
+  });
+
+  test("upload state: the file picker rejects new selections while an upload is in flight", async ({ page }) => {
+    // Regression test: nothing prevented staging a new file while a previous
+    // upload was in flight, and uploadFiles' finally block then replaced
+    // pendingFiles wholesale with its own stale, closed-over result once that
+    // upload resolved -- silently wiping out whatever had been staged since.
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
+    let releaseUpload: () => void = () => {};
+    const uploadGate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const uploadedNames: string[] = [];
+    await page.route(`${API}/projects/${PROJECT.id}/files`, async (route) => {
+      if (route.request().method() !== "POST") return json(route, []);
+      const body = route.request().postData() ?? "";
+      const isFirstUpload = uploadedNames.length === 0;
+      const name = body.includes("b.csv") ? "b.csv" : "a.csv";
+      uploadedNames.push(name);
+      if (isFirstUpload) await uploadGate;
+      return json(
+        route,
+        {
+          id: `file-${name}`,
+          project_id: PROJECT.id,
+          original_name: name,
+          media_type: "text/csv",
+          size_bytes: 10,
+          checksum: "a".repeat(64),
+          status: "queued",
+          uploaded_at: "2026-01-01T00:00:00Z",
+          processed_at: null,
+          error_message: null,
+          deleted_at: null,
+        },
+        201,
+      );
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "a.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("x,y\n0,0\n"),
+    });
+    await page.getByRole("button", { name: "Upload file" }).click();
+    await expect(page.getByRole("button", { name: "Upload file" })).toBeDisabled();
+
+    // While A is still uploading, the picker itself must refuse a new
+    // selection rather than silently accept one that will just be dropped.
+    await expect(page.locator('input[type="file"]')).toBeDisabled();
+
+    // Let A's upload resolve, and the picker become usable again.
+    releaseUpload();
+    await expect(page.locator('input[type="file"]')).toBeEnabled();
+    await expect(page.locator(".file-picker span")).toHaveText("Choose source file(s)");
+
+    // Staging and uploading B afterward must still work normally.
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "b.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("x,y\n1,1\n"),
+    });
+    await expect(page.locator(".file-picker span")).toHaveText("1 file selected");
+    await page.getByRole("button", { name: "Upload file" }).click();
+    await expect.poll(() => uploadedNames).toEqual(["a.csv", "b.csv"]);
+  });
 });

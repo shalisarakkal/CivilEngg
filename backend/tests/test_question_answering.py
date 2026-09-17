@@ -163,6 +163,54 @@ def test_project_boundary_default_aggregates_across_multiple_files(
         get_settings.cache_clear()
 
 
+def test_archiving_a_file_excludes_its_revision_from_project_boundary(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test: _resolve_revision_ids (the default "whole project" scope
+    # for summaries/questions) selected source files with no deleted_at filter,
+    # unlike list_site_model_revisions which does. So archiving a file removed
+    # its revision from GET .../site-model/revisions (and the UI), but a
+    # default-scope summary/question would still silently pull it in.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        project = client.post("/projects", json={"name": "Archived File Site"}).json()
+        first = _upload_process_accept(client, project["id"], "a.csv", b"x,y\n0,0\n")
+        _upload_process_accept(client, project["id"], "b.csv", b"x,y\n3,4\n")
+
+        # Before archiving: both files' points are in scope, giving the 3-4-5 answer.
+        before = client.post(
+            f"/projects/{project['id']}/questions",
+            json={"question": "What is the setback distance?"},
+        ).json()
+        assert before["answer"]["result"] == 5.0
+        assert len(before["revision_ids"]) == 2
+
+        archived = client.delete(f"/projects/{project['id']}/files/{first['file_id']}")
+        assert archived.status_code == 204
+
+        # GET .../site-model/revisions already correctly excludes the archived
+        # file's revision.
+        revisions = client.get(f"/projects/{project['id']}/site-model/revisions").json()
+        assert len(revisions) == 1
+
+        after = client.post(
+            f"/projects/{project['id']}/questions",
+            json={"question": "What is the setback distance?"},
+        )
+        assert after.status_code == 200
+        after_body = after.json()
+        # Only b.csv's single point remains in scope: not enough geometry to
+        # measure a distance, and the archived file's revision must not appear.
+        assert after_body["revision_ids"] == [revisions[0]["id"]]
+        assert after_body["answer"]["confidence"] == 0.0
+        assert "No two mapped geometries" in " ".join(after_body["answer"]["limitations"])
+    finally:
+        app.dependency_overrides.clear()
+        from civil_engineering.config import get_settings
+
+        get_settings.cache_clear()
+
+
 def test_replacing_a_file_excludes_the_superseded_revision_from_project_boundary(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:

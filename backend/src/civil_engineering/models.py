@@ -129,7 +129,7 @@ class ExtractedDocument(Base):
     source_file_id: Mapped[str] = mapped_column(
         ForeignKey("source_files.id", ondelete="CASCADE"), nullable=False
     )
-    revision_number: Mapped[int] = mapped_column(nullable=False, default=1)
+    revision_number: Mapped[int] = mapped_column(nullable=False)
     parser_name: Mapped[str] = mapped_column(String(100), nullable=False)
     content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     warnings: Mapped[list[Any] | None] = mapped_column(JSON)

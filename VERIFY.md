@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0009_unique_source_file_checksum (head)
+0016_unique_extraction_revision (head)
 ```
 
 Return to the project root:

@@ -248,6 +248,13 @@ export default function ProjectWorkspace() {
     setShowMessageDetails(false);
   }
   const [loading, setLoading] = useState(false);
+  // Dedicated to gating the file picker specifically while an upload request
+  // is in flight. `loading` is shared across unrelated actions (creating a
+  // project, calculations, summaries, questions), so using it here would
+  // also block staging a file during any of those -- e.g. right after
+  // creating a project, since selectProject/loadProjectData keeps `loading`
+  // true well past project creation itself.
+  const [uploading, setUploading] = useState(false);
   const [filePendingDelete, setFilePendingDelete] = useState<SourceFile | null>(null);
   const [filePendingPurge, setFilePendingPurge] = useState<SourceFile | null>(null);
   const [acceptingFileId, setAcceptingFileId] = useState<string | null>(null);
@@ -433,6 +440,10 @@ export default function ProjectWorkspace() {
     setSummaryHistory([]);
     setQuestionHistory([]);
     setSelectedFileIds(new Set());
+    setQaRevisionIds([]);
+    setHighlightedEntityIds([]);
+    setPlanSnippetUrl(null);
+    setPlanSnippetError(null);
     await loadProjectData(project);
   }
 
@@ -541,6 +552,7 @@ export default function ProjectWorkspace() {
   async function uploadFiles(filesToUpload: File[], clientRejected: File[] = []) {
     if (!selectedProject || (filesToUpload.length === 0 && clientRejected.length === 0)) return;
     setLoading(true);
+    setUploading(true);
     // Files rejected client-side (e.g. an unsupported extension dropped onto the
     // panel) never reach the server, but still need to appear in the same
     // summary/details breakdown as the ones that were actually uploaded.
@@ -582,6 +594,7 @@ export default function ProjectWorkspace() {
       setMessage(summarizeBatchResult("uploaded and queued for processing", allResults), allResults.length > 1 ? allResults : null);
     } finally {
       setLoading(false);
+      setUploading(false);
       setPendingFiles(filesToUpload.filter((_, index) => uploadResults[index] && !uploadResults[index].ok && uploadResults[index].retryable !== false));
       const input = document.getElementById("source-file") as HTMLInputElement | null;
       if (input) input.value = "";
@@ -592,6 +605,10 @@ export default function ProjectWorkspace() {
   // than uploading them immediately, so the picker and drag-and-drop behave
   // the same way: select/drop, review, then click "Upload file(s)".
   function stageFiles(accepted: File[], rejected: File[] = []) {
+    // While an upload is in flight, uploadFiles' finally block will replace
+    // pendingFiles with its own closed-over result once it resolves; staging
+    // something new here in the meantime would just be silently overwritten.
+    if (uploading) return;
     setPendingFiles(accepted);
     const results: BatchResult[] = [
       ...accepted.map((file): BatchResult => ({ name: file.name, ok: true, detail: "", size: file.size })),
@@ -1192,7 +1209,7 @@ export default function ProjectWorkspace() {
         <section className="project-detail">
           {selectedProject ? <>
             <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button></div>
-            <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><div className="upload-form-actions"><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button>{pendingFiles.length > 0 && <button type="button" className="secondary-button" disabled={loading} onClick={cancelFileSelection}>Cancel</button>}</div></form></div>
+            <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" disabled={uploading} onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><div className="upload-form-actions"><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button>{pendingFiles.length > 0 && <button type="button" className="secondary-button" disabled={loading} onClick={cancelFileSelection}>Cancel</button>}</div></form></div>
             <div className="file-list">
               <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
               {files.length > 0 && <div className="file-list-controls">

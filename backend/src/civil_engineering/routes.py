@@ -514,20 +514,35 @@ def process_file(
     database.commit()
     try:
         normalized = parse_file(Path(source_file.stored_path), source_file.original_name)
-        extraction = ExtractedDocument(
-            processing_job_id=job.id,
-            source_file_id=file_id,
-            parser_name=normalized.parser_name,
-            content=normalized.as_dict(),
-            warnings=normalized.warnings,
-        )
-        database.add(extraction)
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            current_revision = database.scalar(
+                select(func.max(ExtractedDocument.revision_number)).where(
+                    ExtractedDocument.source_file_id == file_id
+                )
+            )
+            extraction = ExtractedDocument(
+                processing_job_id=job.id,
+                source_file_id=file_id,
+                revision_number=(current_revision or 0) + 1,
+                parser_name=normalized.parser_name,
+                content=normalized.as_dict(),
+                warnings=normalized.warnings,
+            )
+            database.add(extraction)
+            try:
+                database.flush()
+                break
+            except IntegrityError:
+                database.rollback()
+                if attempt == max_attempts - 1:
+                    raise
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc)
         job.warnings = normalized.warnings
         source_file.status = "completed"
         source_file.processed_at = job.completed_at
-    except (ExtractionError, OSError) as error:
+    except (ExtractionError, OSError, IntegrityError) as error:
         job.status = "failed"
         job.completed_at = datetime.now(timezone.utc)
         job.error_message = str(error)
@@ -1160,7 +1175,14 @@ def _resolve_revision_ids(
     )
     file_ids = {job.source_file_id for job in jobs.values()}
     files = (
-        {file.id: file for file in database.scalars(select(SourceFile).where(SourceFile.id.in_(file_ids)))}
+        {
+            file.id: file
+            for file in database.scalars(
+                select(SourceFile).where(
+                    SourceFile.id.in_(file_ids), SourceFile.deleted_at.is_(None)
+                )
+            )
+        }
         if file_ids
         else {}
     )
