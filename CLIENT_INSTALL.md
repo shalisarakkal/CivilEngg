@@ -153,6 +153,15 @@ build` (frontend production build, including its TypeScript check) and
 `uv run alembic current` (backend, against this project's real
 database) completed successfully from it alone.
 
+A ready-to-run copy of the assembly script above lives at
+`S:\Civill-Beta\build-dist.ps1` on the primary dev machine (run it with
+no arguments to rebuild `civil-engineering-dist.zip` there). It's kept
+outside this repository by choice, so it is **not version-controlled**
+alongside this file — if the required-file list above ever changes,
+that script must be updated by hand to match; it will not update
+itself. The inline script above is the source of truth for what the
+manifest should contain.
+
 ### 3. Install dependencies
 
 From the project root:
