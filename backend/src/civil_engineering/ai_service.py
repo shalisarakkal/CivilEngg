@@ -4,7 +4,13 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from civil_engineering.calculations import CalculationError, calculate_distance, calculate_slope
+from civil_engineering.calculations import (
+    CalculationError,
+    calculate_area,
+    calculate_distance,
+    calculate_perimeter,
+    calculate_slope,
+)
 
 DRAINAGE_KEYWORDS = ("storm", "drain", "culvert", "swale", "detention", "retention")
 UTILITY_KEYWORDS = ("water", "sewer", "gas", "electric", "utility", "manhole", "hydrant")
@@ -89,6 +95,10 @@ def route_question(question: str) -> str:
         return "slope"
     if "elevation" in normalized:
         return "elevation"
+    if "perimeter" in normalized:
+        return "perimeter"
+    if "area" in normalized:
+        return "area"
     return "summary"
 
 
@@ -314,6 +324,73 @@ def _answer_distance(comparable: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _geometry_type_candidates(
+    entities: list[dict[str, Any]], geometry_types: set[str]
+) -> list[dict[str, Any]]:
+    return [
+        entity
+        for entity in entities
+        if entity.get("validation_status") == "valid"
+        and (geometry := entity.get("geometry")) is not None
+        and geometry.get("type") in geometry_types
+    ]
+
+
+def _answer_area(entities: list[dict[str, Any]]) -> dict[str, Any]:
+    # Area is a property of one closed shape, not a relationship between two
+    # geometries -- unlike _answer_distance, this needs exactly one candidate.
+    candidates = _geometry_type_candidates(entities, {"Polygon", "MultiPolygon", "Circle"})
+    if not candidates:
+        return _insufficient("No mapped polygon geometry is available to measure an area.")
+    if len(candidates) > 1:
+        return _ambiguous(candidates, "Multiple mapped polygons could define this area.")
+    entity = candidates[0]
+    try:
+        result = calculate_area(entity["geometry"], "m", "m")
+    except CalculationError as error:
+        return _insufficient(f"Area could not be calculated: {error}")
+    return {
+        "answer": f"The measured area is {result['result']:.3f} {result['unit']}.",
+        "method": "deterministic geometry calculation",
+        "formula": result["formula"],
+        "result": result["result"],
+        "unit": result["unit"],
+        "source_references": [entity.get("source_reference")],
+        "limitations": ["Assumes the geometry is measured in the requested output unit."],
+        "confidence": 0.9,
+    }
+
+
+def _answer_perimeter(entities: list[dict[str, Any]]) -> dict[str, Any]:
+    # Perimeter sums every segment of one shape (open or closed), not a
+    # relationship between two geometries -- unlike _answer_distance, this
+    # needs exactly one candidate.
+    candidates = _geometry_type_candidates(
+        entities, {"LineString", "MultiLineString", "Polygon", "MultiPolygon", "Circle"}
+    )
+    if not candidates:
+        return _insufficient(
+            "No mapped line or polygon geometry is available to measure a perimeter."
+        )
+    if len(candidates) > 1:
+        return _ambiguous(candidates, "Multiple mapped geometries could define this perimeter.")
+    entity = candidates[0]
+    try:
+        result = calculate_perimeter(entity["geometry"], "m", "m")
+    except CalculationError as error:
+        return _insufficient(f"Perimeter could not be calculated: {error}")
+    return {
+        "answer": f"The measured perimeter is {result['result']:.3f} {result['unit']}.",
+        "method": "deterministic geometry calculation",
+        "formula": result["formula"],
+        "result": result["result"],
+        "unit": result["unit"],
+        "source_references": [entity.get("source_reference")],
+        "limitations": ["Assumes the geometry is measured in the requested output unit."],
+        "confidence": 0.9,
+    }
+
+
 def _entity_centroid(entity: dict[str, Any]) -> tuple[float, float] | None:
     geometry = entity.get("geometry")
     if not geometry:
@@ -479,4 +556,8 @@ class MockAIProvider:
             return _answer_slope(entities)
         if intent == "elevation":
             return _answer_elevation(entities)
+        if intent == "area":
+            return _answer_area(entities)
+        if intent == "perimeter":
+            return _answer_perimeter(entities)
         return _answer_summary(entities)

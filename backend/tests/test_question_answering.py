@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
+import ezdxf
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
@@ -256,6 +257,62 @@ def test_replacing_a_file_excludes_the_superseded_revision_from_project_boundary
             files={"file": ("survey.csv", b"x,y\n1,1\n", "text/csv")},
         )
         assert second_replace_attempt.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+        from civil_engineering.config import get_settings
+
+        get_settings.cache_clear()
+
+
+def test_area_and_perimeter_questions_are_routed_and_answered(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test: "area"/"perimeter" questions previously fell through
+    # route_question's default "summary" intent (which only looks for
+    # extracted text) and always reported insufficient data, even though both
+    # calculations already worked fine through POST /calculations directly.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]
+        modelspace = drawing.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 10), (0, 10)], close=True, dxfattribs={"layer": "BUILDING"}
+        )
+        dxf_path = tmp_path / "building.dxf"
+        drawing.saveas(dxf_path)
+
+        project = client.post("/projects", json={"name": "Area Perimeter Site"}).json()
+        uploaded = client.post(
+            f"/projects/{project['id']}/files",
+            files={"file": ("building.dxf", dxf_path.read_bytes(), "application/dxf")},
+        ).json()
+        processed = client.post(f"/projects/{project['id']}/files/{uploaded['id']}/process").json()
+        assert processed["status"] == "completed"
+        revision = client.post(
+            f"/projects/{project['id']}/site-model/revisions/from-extraction/{uploaded['id']}"
+        ).json()
+
+        area = client.post(
+            f"/projects/{project['id']}/questions",
+            json={
+                "question": "What is the area of the building?",
+                "revision_ids": [revision["id"]],
+            },
+        ).json()
+        assert area["intent"] == "area"
+        assert area["answer"]["confidence"] == 0.9
+        assert area["answer"]["result"] == 100.0
+
+        perimeter = client.post(
+            f"/projects/{project['id']}/questions",
+            json={
+                "question": "What is the perimeter of the building?",
+                "revision_ids": [revision["id"]],
+            },
+        ).json()
+        assert perimeter["intent"] == "perimeter"
+        assert perimeter["answer"]["confidence"] == 0.9
+        assert perimeter["answer"]["result"] == 40.0
     finally:
         app.dependency_overrides.clear()
         from civil_engineering.config import get_settings

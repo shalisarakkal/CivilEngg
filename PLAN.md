@@ -383,7 +383,7 @@ Phase 6 lifecycle additions:
 - [x] Define local-storage backup and restore procedures — captured together with the database (DEPLOYMENT.md section 6), since they must stay in sync
 - [x] Add deployment configuration for the selected frontend and backend hosts if needed — not applicable; the MVP is a single local machine per ADR-002/ADR-005 (see DEPLOYMENT.md section 1)
 - [x] Configure environment secrets outside source control — already enforced via `.gitignore`; see DEPLOYMENT.md section 4 for the checklist
-- [x] Run a final smoke test against the deployed environment — 2026-09-16: built and ran the actual production frontend (`npm run build`, `npm run start`) and backend (`npm run start:backend`, no `--reload`) against the real database, and exercised create/upload/process/accept-revision/ask end to end via the API. Surfaced and fixed a real bug along the way (CSV point elevation was dropped, see RISK_REGISTER.md) and found an open gap (perimeter/area questions aren't routed, see RISK_REGISTER.md), both logged. Not yet done: a pass through the UI itself in a browser rather than the API directly
+- [x] Run a final smoke test against the deployed environment — 2026-09-16: built and ran the actual production frontend (`npm run build`, `npm run start`) and backend (`npm run start:backend`, no `--reload`) against the real database, and exercised create/upload/process/accept-revision/ask end to end via the API. Surfaced and fixed two real bugs along the way (CSV point elevation was dropped; perimeter/area questions weren't routed — both now fixed, see RISK_REGISTER.md). Not yet done: a pass through the UI itself in a browser rather than the API directly
 - [x] Publish a short user guide for supported files, units, calculations, and limitations — see USER_GUIDE.md
 - [x] Record post-MVP issues and prioritize the next release — see section 8 below
 
@@ -482,11 +482,7 @@ freeze):
    for a real reported failure (a multi-file batch outcome silently lost
    because a later action overwrote the single-line status banner), not
    a speculative improvement.
-2. **Wire perimeter and area into the question router** (`route_question`
-   in ai_service.py): found via the Phase Z final smoke test — both
-   calculations already work through `/calculations` directly, they're
-   just unreachable by asking a question about them. See RISK_REGISTER.md.
-3. **Phase 13 optional - archive/project file compression**: lowest
+2. **Phase 13 optional - archive/project file compression**: lowest
    urgency of the deferred work — no reported pain point yet, and
    project-level compression is a bigger change than file-level since
    project archival doesn't touch storage at all today.

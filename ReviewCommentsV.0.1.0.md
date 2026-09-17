@@ -1,6 +1,8 @@
 # Code Review — v0.1.0-mvp
 
-**Update (2026-09-16): all 9 findings below have been fixed**, each via a reproduce-first cycle (a failing test written against the actual bug and confirmed to fail on the pre-fix code, then the fix applied, then the same test confirmed to pass) rather than inference from reading the code alone. See the "Fix applied" note under each finding for the specific commit-worthy change and its regression test. The original finding text is left unedited below for the record.
+**Update (2026-09-16): all 9 findings below have been fixed and committed** as `d8c4164` ("Fix all 9 issues from the whole-project code review"), each via a reproduce-first cycle (a failing test written against the actual bug and confirmed to fail on the pre-fix code, then the fix applied, then the same test confirmed to pass) rather than inference from reading the code alone. See the "Fix applied" note under each finding for the specific change and its regression test. The original finding text is left unedited below for the record.
+
+The `v0.1.0-mvp` tag still points at `356f329` (the pre-fix commit reviewed below) and has deliberately **not** been moved or replaced — more fixes may follow before the next release point is tagged.
 
 Reviewed at commit `356f32926f2bc232b2f1d9bba570f46d05d41d3c` (2026-09-16), the tagged `v0.1.0-mvp` release candidate. This is a whole-project audit, not a single-PR diff review — there was no open pull request to review against, so the full backend, frontend, and documentation were covered.
 
