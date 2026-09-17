@@ -395,6 +395,27 @@ Phase 6 lifecycle additions:
 - [x] Deployment, configuration, and rollback steps are documented — see DEPLOYMENT.md
 - [x] The server is left running and ready for user acceptance testing — production frontend/backend left running on ports 3000/8000 after the smoke test
 
+### Phase 14 - Question-Answering Coverage Expansion (not yet scoped)
+
+**Objective:** Found via a manual audit against `TestQuestions` (a checklist of realistic site-plan questions covering document metadata, property/building/parking/site-feature geometry, elevations, and deterministic calculations): the natural-language Q&A endpoint (`ai_service.py`'s `route_question`/`MockAIProvider.answer`) only recognizes six intents by keyword (`area`, `perimeter`, `distance`/`setback`, `slope`, `elevation`, and four-direction `north/south/east/west` + `property line`/`building`/`driveway`/`curb cut`). Everything else — document metadata, counts, named-feature lookups, specific labeled elevations — falls through to a generic text-retrieval fallback with no computed value. Additionally, `_answer_area`/`_answer_perimeter` don't filter candidates by semantic role the way `_answer_directional` does, so a site model containing both a parcel boundary and a building footprint polygon makes "What is the property area?" and "What is the building footprint area?" collide on the same candidate pool and return "ambiguous" instead of picking the right one.
+
+**Work items (not yet broken down), roughly in increasing effort:**
+
+- [ ] Fix the area/perimeter role-filtering gap: reuse `ROLE_TO_SEMANTIC_TYPE` (already built for directional questions) in `_answer_area`/`_answer_perimeter` so "property"/"parcel" phrasing filters to `parcel_boundary` and "building"/"footprint" phrasing filters to `building_footprint`, instead of matching every polygon in the model
+- [ ] Add semantic-type keywords for currently-unclassified features referenced in `TestQuestions` (utility easement, parking space/lot, tree, sidewalk, stormwater detention basin), mirroring the existing `DRIVEWAY_TYPE_KEYWORDS`/`CURB_CUT_TYPE_KEYWORDS` pattern in `routes.py`
+- [ ] Wire the existing drainage/utility keyword rollups (`_keyword_summary` in `ai_service.py`) into `ask_question`, not just the separate project-summary endpoint, so questions like "Is a utility easement shown?" get more than the generic text fallback
+- [ ] Add a "count" intent (parking spaces, trees) once those entities carry semantic types
+- [ ] Add building/lot dimension, width, length, and orientation answers computed from a polygon's minimum rotated bounding rectangle (Shapely) rather than falling back to text
+- [ ] Add a deterministic setback-compliance check (e.g. is the building footprint within a buffered parcel boundary) rather than only the existing "tight clearance" heuristic flag on the summary endpoint
+- [ ] Extend the existing DXF label-to-geometry proximity linking (RISK_REGISTER.md) to elevation points specifically, and match a question's specific number token (e.g. "EL 102.5") to a labeled point, so specific spot-elevation lookups and differences between two *named* points can be answered instead of only the overall min/max/average
+- [ ] Investigate document title-block metadata extraction (project name, sheet number, revision, drawing date, scale, construction-ready flag, sheet count, drawing type, legend contents) — a new parsing pass over PDF/DXF text, not just a keyword-list extension; treat as the largest and most speculative item since title-block layouts vary a lot per drawing set (related to the existing "Improve PDF plan-set vision, OCR, title-block ... extraction" line in the Post-MVP Roadmap below)
+
+**Exit criteria (draft, pending scoping):**
+
+- [ ] `TestQuestions` categories 2, 3, 6, and 7 (property/building area & perimeter, elevation, deterministic calculations) resolve correctly even when the site model contains multiple similar-role geometries
+- [ ] At least utility easements, parking, and trees are classified and answerable for location/count where geometry supports it
+- [ ] Document-metadata questions (category 1) are scoped as accepted-limitation or given a concrete extraction plan — decide which before implementation starts
+
 ## 5. Testing Strategy
 
 ### Unit tests
@@ -486,6 +507,10 @@ freeze):
    urgency of the deferred work — no reported pain point yet, and
    project-level compression is a bigger change than file-level since
    project archival doesn't touch storage at all today.
+3. **Phase 14 - Question-Answering Coverage Expansion** (not yet
+   scoped): found via a manual audit against `TestQuestions`; closes
+   real gaps in what the Q&A endpoint can answer (see the phase entry
+   above for the full breakdown).
 
 Everything below is unprioritized relative to each other and to the
 items above:
@@ -498,6 +523,20 @@ items above:
 6. Add multi-user authentication, permissions, billing, and audit history.
 7. Add cloud storage while retaining a local-storage deployment option.
 8. Add Sentry, PostHog, and centralized logging after the core workflow is stable.
+9. Package as an installable desktop app (e.g. Electron) instead of a
+   terminal-run local deployment — raised in conversation, no reported
+   need yet. The frontend/backend source itself has no OS-specific code
+   (Next.js, FastAPI, Shapely, and PyProj are all cross-platform, and a
+   grep of `backend/src` and `frontend/app` turned up no hardcoded
+   Windows paths or `platform`/`win32` checks), so the app is expected to
+   run on macOS/Linux already for anyone willing to set it up manually
+   there. It's only the *documented, verified* setup (VERIFY.md,
+   DEPLOYMENT.md) and the packaging story that are Windows-only and
+   Windows-manual today. A desktop-installer effort would need to: pick
+   one OS's install experience first (or all three), bundle/auto-launch
+   the Python backend, and either bundle PostgreSQL/PostGIS per OS or
+   switch to an embedded database (e.g. SQLite+SpatiaLite) the
+   calculation engine and tests would need to be re-verified against.
 
 ## 9. Nice-to-Have Improvements
 
