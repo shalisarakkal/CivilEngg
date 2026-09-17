@@ -83,11 +83,75 @@ software and create Windows services.
     automatically (`Get-Service postgresql*` should show `Running` /
     `Automatic`, matching VERIFY.md section 3)
 
-### 2. Get the application code onto the machine
+### 2. Build a distribution package (on your own machine, not the client's)
 
-Copy or clone the repository onto the client machine (e.g. via `git
-clone` if the client machine can reach the repository, or by copying
-a release archive).
+The full git repository also contains developer-only material that the
+running application never reads: root-level planning docs (`PLAN.md`,
+`ARCHITECTURE.md`, `DATA_MODEL.md`, `API.md`, `TESTING.md`,
+`RISK_REGISTER.md`, `DECISIONS.md`, `CHANGELOG.md`, `Requirements.md`,
+`TECHNOLOGY.md`, `ReviewCommentsV.0.1.0.md`, `AGENTS.md`), the
+`backend/tests` and `frontend/tests` suites, `frontend/playwright.config.ts`,
+`frontend/AGENTS.md`/`frontend/CLAUDE.md`, `frontend/eslint.config.mjs`,
+and `backend/README.md`. None of it is needed to run the app, and there's
+no reason for a client's machine to end up with your internal ADRs,
+risk register, or code-review notes on its disk. `git clone` is still
+fine as a fallback if you'd rather not bother trimming, but the
+following gives a clean, minimal package to zip and hand over instead.
+
+From a clean checkout on your own machine, copy only these paths into a
+new folder (e.g. `civil-engineering-dist/`), preserving the directory
+structure:
+
+```text
+civil-engineering-dist/
+├── package.json
+├── package-lock.json
+├── .env.example
+├── backend/
+│   ├── alembic.ini
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   ├── migrations/
+│   ├── scripts/
+│   └── src/
+└── frontend/
+    ├── package.json
+    ├── next.config.ts
+    ├── tsconfig.json
+    └── app/
+```
+
+In PowerShell:
+
+```powershell
+$dist = "civil-engineering-dist"
+New-Item -ItemType Directory -Force "$dist\backend", "$dist\frontend" | Out-Null
+
+Copy-Item package.json, package-lock.json, .env.example -Destination $dist
+
+Copy-Item backend\alembic.ini, backend\pyproject.toml, backend\uv.lock -Destination "$dist\backend"
+Copy-Item backend\migrations, backend\scripts, backend\src -Destination "$dist\backend" -Recurse
+
+Copy-Item frontend\package.json, frontend\next.config.ts, frontend\tsconfig.json -Destination "$dist\frontend"
+Copy-Item frontend\app -Destination "$dist\frontend" -Recurse
+
+Compress-Archive -Path $dist -DestinationPath "civil-engineering-dist.zip" -Force
+```
+
+Transfer `civil-engineering-dist.zip` to the client machine (removable
+media, secure file transfer — whatever fits the client's environment)
+and extract it to wherever you want the application to live, e.g.
+`C:\CivilEngineeringApp\`.
+
+Sanity-check the extracted folder against the tree above before moving
+on — a missing `uv.lock` or `migrations` folder will surface as a
+confusing failure several steps later rather than an obvious one here.
+
+**Verified 2026-09-17:** this exact manifest (no `eslint.config.mjs`,
+no `tests/`) was assembled in an isolated folder and both `npm run
+build` (frontend production build, including its TypeScript check) and
+`uv run alembic current` (backend, against this project's real
+database) completed successfully from it alone.
 
 ### 3. Install dependencies
 
