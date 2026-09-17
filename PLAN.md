@@ -498,3 +498,34 @@ items above:
 6. Add multi-user authentication, permissions, billing, and audit history.
 7. Add cloud storage while retaining a local-storage deployment option.
 8. Add Sentry, PostHog, and centralized logging after the core workflow is stable.
+
+## 9. Nice-to-Have Improvements
+
+Small, optional quality-of-life items — not required for any phase's exit
+criteria, not phase-gated, and not prioritized relative to each other or
+to the Post-MVP Roadmap above. Pick these up opportunistically rather
+than scheduling them. (Phase 13's optional archive/project file
+compression is tracked in its own section above, not duplicated here.)
+
+- DWF file support. Not DWG/DXF: DWF is Autodesk's lightweight
+  publish/view format (closer to "a PDF for CAD drawings" than an
+  editable drawing format), and hasn't been mentioned anywhere else in
+  Requirements.md/AGENTS.md/this plan. Raised in conversation with no
+  specific source-file need behind it yet; would need its own parsing
+  approach separate from the DWG post-MVP item above.
+- A browsing UI for the purge-history log (`GET /admin/purge-history`
+  has existed since Phase 13; deliberately deferred until there's enough
+  real history to know what's worth showing).
+- A regression test for the file-level branch of `_sweep_expired_archives`
+  (`backend/src/civil_engineering/routes.py`) — the project-level branch
+  is fully tested (`test_archive_auto_purge_retention_and_history`), the
+  structurally-identical file branch isn't. Noted as a coverage gap, not
+  a known bug, in ReviewCommentsV.0.1.0.md.
+- Investigate the pre-existing Playwright flakiness in
+  `full-workflow.spec.ts`/`phase9.spec.ts` (5 tests fail against the real
+  backend even on unmodified code — confirmed via `git stash` while
+  fixing the issues in ReviewCommentsV.0.1.0.md). The webServer log shows
+  "Slow filesystem detected... is a network drive," suggesting this
+  machine's `S:` drive is the cause rather than an application defect;
+  worth trying a longer test timeout or relocating `frontend/.next` to a
+  local disk before assuming it's a real bug.
