@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from shapely.geometry import Point, shape
 from sqlalchemy import delete, func, select
@@ -10,6 +10,26 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from civil_engineering.ai_service import MockAIProvider, route_question
+from civil_engineering.auth import (
+    ROLE_ADMIN,
+    ROLE_POWER_USER,
+    ROLE_USER,
+    clear_session_cookie,
+    create_session,
+    get_current_user,
+    hash_password,
+    is_project_member,
+    is_project_owner,
+    logout_current_session,
+    require_admin,
+    require_client_manager,
+    require_project_archive_rights,
+    require_project_member,
+    require_project_owner,
+    set_session_cookie,
+    user_owned_project_ids,
+    verify_password,
+)
 from civil_engineering.calculations import (
     CalculationError,
     calculate_area,
@@ -27,12 +47,14 @@ from civil_engineering.models import (
     ExtractedDocument,
     ProcessingJob,
     Project,
+    ProjectMembership,
     ProjectRevision,
     ProjectSummary,
     PurgeHistoryEntry,
     QuestionAnswer,
     SiteModelEntity,
     SourceFile,
+    User,
     new_id,
 )
 from civil_engineering.plan_snippets import PlanSnippetError, render_dxf_snippet
@@ -45,8 +67,13 @@ from civil_engineering.schemas import (
     ClientResponse,
     ClientUpdate,
     ExtractedDocumentResponse,
+    LoginRequest,
+    PasswordChangeRequest,
     ProcessingJobResponse,
     ProjectCreate,
+    ProjectMembershipCreate,
+    ProjectMembershipResponse,
+    ProjectOwnerUpdate,
     ProjectResponse,
     ProjectUpdate,
     PurgeHistoryEntryResponse,
@@ -56,6 +83,9 @@ from civil_engineering.schemas import (
     SiteModelRevisionResponse,
     SourceFileResponse,
     SummaryResponse,
+    UserCreate,
+    UserResponse,
+    UserUpdate,
 )
 from civil_engineering.site_model import SiteModelError, normalize_geometry
 from civil_engineering.storage import (
@@ -77,13 +107,6 @@ def get_client_or_404(client_id: str, database: Session) -> Client:
     return client
 
 
-def get_project_or_404(project_id: str, database: Session) -> Project:
-    project = database.get(Project, project_id)
-    if project is None or project.archived_at is not None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
-
-
 def _as_utc(value: datetime) -> datetime:
     # SQLite (used by the test suite) can hand back a naive datetime for a
     # DateTime(timezone=True) column even though it was written as UTC-aware;
@@ -101,6 +124,7 @@ def _log_purge(
     project_id: str | None,
     archived_at: datetime | None,
     reason: str,
+    purged_by_user_id: str | None,
 ) -> None:
     database.add(
         PurgeHistoryEntry(
@@ -110,6 +134,7 @@ def _log_purge(
             project_id=project_id,
             archived_at=archived_at,
             purge_reason=reason,
+            purged_by_user_id=purged_by_user_id,
         )
     )
 
@@ -123,6 +148,10 @@ def _purge_project(database: Session, project: Project, *, reason: str) -> None:
         project_id=None,
         archived_at=project.archived_at,
         reason=reason,
+        # The project's own owner_id row disappears along with it, so this is
+        # captured here -- not just for a manual purge, but for an automatic
+        # retention sweep too, so an owner can still find their own history.
+        purged_by_user_id=project.owner_id,
     )
     remove_project_storage(project.id)
     # See the comment on the original bulk-delete below for why this bypasses
@@ -131,6 +160,7 @@ def _purge_project(database: Session, project: Project, *, reason: str) -> None:
 
 
 def _purge_file(database: Session, source_file: SourceFile, *, reason: str) -> None:
+    project = database.get(Project, source_file.project_id)
     _log_purge(
         database,
         resource_type="file",
@@ -139,6 +169,7 @@ def _purge_file(database: Session, source_file: SourceFile, *, reason: str) -> N
         project_id=source_file.project_id,
         archived_at=source_file.deleted_at,
         reason=reason,
+        purged_by_user_id=project.owner_id if project is not None else None,
     )
     remove_file(source_file.archived_path or source_file.stored_path)
     database.delete(source_file)
@@ -178,8 +209,263 @@ def _sweep_expired_archives(database: Session) -> None:
     database.commit()
 
 
+@router.post("/auth/login", response_model=UserResponse)
+def login(payload: LoginRequest, response: Response, database: Session = Depends(get_db)) -> User:
+    user = database.scalar(select(User).where(User.username == payload.username))
+    if (
+        user is None
+        or user.disabled_at is not None
+        or not verify_password(payload.password, user.password_hash)
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    session = create_session(database, user)
+    set_session_cookie(response, session)
+    return user
+
+
+@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(request: Request, response: Response, database: Session = Depends(get_db)) -> None:
+    logout_current_session(request, database)
+    clear_session_cookie(response)
+
+
+@router.get("/auth/me", response_model=UserResponse)
+def read_current_user(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
+
+
+@router.patch("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_own_password(
+    payload: PasswordChangeRequest,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect"
+        )
+    current_user.password_hash = hash_password(payload.new_password)
+    database.commit()
+
+
+def _require_not_last_active_admin(database: Session, target: User) -> None:
+    if target.role != ROLE_ADMIN or target.disabled_at is not None:
+        return
+    other_admins = database.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.role == ROLE_ADMIN, User.disabled_at.is_(None), User.id != target.id)
+    )
+    if not other_admins:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot disable or delete the last active admin",
+        )
+
+
+def _require_no_owned_projects(database: Session, target: User) -> None:
+    owned = list(
+        database.scalars(
+            select(Project).where(Project.owner_id == target.id, Project.archived_at.is_(None))
+        )
+    )
+    if owned:
+        names = ", ".join(project.name for project in owned)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Reassign ownership of these projects to another power_user before "
+                f"disabling or deleting this user: {names}"
+            ),
+        )
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: UserCreate,
+    database: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> User:
+    existing = database.scalar(select(User).where(User.username == payload.username))
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    user = User(
+        username=payload.username, password_hash=hash_password(payload.password), role=payload.role
+    )
+    database.add(user)
+    database.commit()
+    database.refresh(user)
+    return user
+
+
+@router.get("/users", response_model=list[UserResponse])
+def list_users(
+    database: Session = Depends(get_db), _admin: User = Depends(require_admin)
+) -> list[User]:
+    return list(database.scalars(select(User).order_by(User.username)))
+
+
+@router.get("/users/lookup", response_model=UserResponse)
+def lookup_user_by_username(
+    username: str,
+    database: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> User:
+    """Exact-match username -> user, for any authenticated caller (not just
+    admins). Needed so a Power User project owner can add a collaborator by
+    username without the full-directory access GET /users requires -- this
+    only confirms one exact username, it doesn't enumerate the directory."""
+    user = database.scalar(select(User).where(User.username == username))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+def get_user_or_404(user_id: str, database: Session) -> User:
+    user = database.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+def update_user(
+    user_id: str,
+    payload: UserUpdate,
+    database: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> User:
+    user = get_user_or_404(user_id, database)
+    if payload.disabled is True:
+        _require_not_last_active_admin(database, user)
+        _require_no_owned_projects(database, user)
+        user.disabled_at = datetime.now(timezone.utc)
+    elif payload.disabled is False:
+        user.disabled_at = None
+    if payload.role is not None:
+        if user.role == ROLE_ADMIN and payload.role != ROLE_ADMIN:
+            _require_not_last_active_admin(database, user)
+        user.role = payload.role
+    if payload.password is not None:
+        user.password_hash = hash_password(payload.password)
+    database.commit()
+    database.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: str,
+    database: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> None:
+    user = get_user_or_404(user_id, database)
+    _require_not_last_active_admin(database, user)
+    _require_no_owned_projects(database, user)
+    database.delete(user)
+    database.commit()
+
+
+def _membership_response(membership: ProjectMembership) -> ProjectMembershipResponse:
+    # username/role live on the related User, not the membership row itself,
+    # so from_attributes=True alone can't fill them -- build explicitly.
+    return ProjectMembershipResponse(
+        id=membership.id,
+        project_id=membership.project_id,
+        user_id=membership.user_id,
+        username=membership.user.username,
+        role=membership.user.role,
+        created_at=membership.created_at,
+    )
+
+
+@router.get("/projects/{project_id}/members", response_model=list[ProjectMembershipResponse])
+def list_project_members(
+    project: Project = Depends(require_project_member),
+    database: Session = Depends(get_db),
+) -> list[ProjectMembershipResponse]:
+    statement = select(ProjectMembership).where(ProjectMembership.project_id == project.id)
+    return [_membership_response(m) for m in database.scalars(statement)]
+
+
+@router.post(
+    "/projects/{project_id}/members",
+    response_model=ProjectMembershipResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_project_member(
+    payload: ProjectMembershipCreate,
+    project: Project = Depends(require_project_owner),
+    database: Session = Depends(get_db),
+) -> ProjectMembershipResponse:
+    member = get_user_or_404(payload.user_id, database)
+    if member.id == project.owner_id:
+        raise HTTPException(
+            status_code=422, detail="The owner is already associated with this project"
+        )
+    existing = database.scalar(
+        select(ProjectMembership).where(
+            ProjectMembership.project_id == project.id, ProjectMembership.user_id == member.id
+        )
+    )
+    if existing is not None:
+        return _membership_response(existing)
+    membership = ProjectMembership(project_id=project.id, user_id=member.id)
+    database.add(membership)
+    database.commit()
+    database.refresh(membership)
+    return _membership_response(membership)
+
+
+@router.delete("/projects/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_project_member(
+    user_id: str,
+    project: Project = Depends(require_project_owner),
+    database: Session = Depends(get_db),
+) -> None:
+    membership = database.scalar(
+        select(ProjectMembership).where(
+            ProjectMembership.project_id == project.id, ProjectMembership.user_id == user_id
+        )
+    )
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    database.delete(membership)
+    database.commit()
+
+
+@router.patch("/projects/{project_id}/owner", response_model=ProjectResponse)
+def reassign_project_owner(
+    payload: ProjectOwnerUpdate,
+    project: Project = Depends(require_project_owner),
+    database: Session = Depends(get_db),
+) -> Project:
+    new_owner = get_user_or_404(payload.owner_id, database)
+    if new_owner.role != ROLE_POWER_USER:
+        raise HTTPException(status_code=422, detail="A project owner must be a power_user")
+    if new_owner.disabled_at is not None:
+        raise HTTPException(status_code=422, detail="Cannot assign a disabled user as owner")
+    project.owner_id = new_owner.id
+    # The new owner's access no longer depends on a membership row; the old
+    # owner keeps theirs unless explicitly removed, same as any collaborator.
+    stale_membership = database.scalar(
+        select(ProjectMembership).where(
+            ProjectMembership.project_id == project.id, ProjectMembership.user_id == new_owner.id
+        )
+    )
+    if stale_membership is not None:
+        database.delete(stale_membership)
+    database.commit()
+    database.refresh(project)
+    return project
+
+
 @router.post("/clients", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
-def create_client(payload: ClientCreate, database: Session = Depends(get_db)) -> Client:
+def create_client(
+    payload: ClientCreate,
+    database: Session = Depends(get_db),
+    _user: User = Depends(require_client_manager),
+) -> Client:
     client = Client(name=payload.name)
     database.add(client)
     database.commit()
@@ -188,19 +474,26 @@ def create_client(payload: ClientCreate, database: Session = Depends(get_db)) ->
 
 
 @router.get("/clients", response_model=list[ClientResponse])
-def list_clients(database: Session = Depends(get_db)) -> list[Client]:
+def list_clients(
+    database: Session = Depends(get_db), _user: User = Depends(get_current_user)
+) -> list[Client]:
     statement = select(Client).where(Client.archived_at.is_(None)).order_by(Client.name)
     return list(database.scalars(statement))
 
 
 @router.get("/clients/{client_id}", response_model=ClientResponse)
-def read_client(client_id: str, database: Session = Depends(get_db)) -> Client:
+def read_client(
+    client_id: str, database: Session = Depends(get_db), _user: User = Depends(get_current_user)
+) -> Client:
     return get_client_or_404(client_id, database)
 
 
 @router.patch("/clients/{client_id}", response_model=ClientResponse)
 def update_client(
-    client_id: str, payload: ClientUpdate, database: Session = Depends(get_db)
+    client_id: str,
+    payload: ClientUpdate,
+    database: Session = Depends(get_db),
+    _user: User = Depends(require_client_manager),
 ) -> Client:
     client = get_client_or_404(client_id, database)
     if payload.name is not None:
@@ -211,7 +504,11 @@ def update_client(
 
 
 @router.post("/clients/{client_id}/archive", response_model=ClientResponse)
-def archive_client(client_id: str, database: Session = Depends(get_db)) -> Client:
+def archive_client(
+    client_id: str,
+    database: Session = Depends(get_db),
+    _user: User = Depends(require_client_manager),
+) -> Client:
     client = get_client_or_404(client_id, database)
     client.archived_at = datetime.now(timezone.utc)
     database.commit()
@@ -220,10 +517,31 @@ def archive_client(client_id: str, database: Session = Depends(get_db)) -> Clien
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-def create_project(payload: ProjectCreate, database: Session = Depends(get_db)) -> Project:
+def create_project(
+    payload: ProjectCreate,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Project:
+    if current_user.role == ROLE_USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins and power users can create projects",
+        )
     if payload.client_id is not None:
         get_client_or_404(payload.client_id, database)
-    project = Project(**payload.model_dump())
+    data = payload.model_dump()
+    if current_user.role == ROLE_POWER_USER:
+        data["owner_id"] = current_user.id
+    else:  # admin
+        owner_id = data.get("owner_id")
+        if not owner_id:
+            raise HTTPException(
+                status_code=422, detail="owner_id is required and must belong to a power_user"
+            )
+        owner = get_user_or_404(owner_id, database)
+        if owner.role != ROLE_POWER_USER:
+            raise HTTPException(status_code=422, detail="A project owner must be a power_user")
+    project = Project(**data)
     database.add(project)
     database.commit()
     database.refresh(project)
@@ -231,21 +549,26 @@ def create_project(payload: ProjectCreate, database: Session = Depends(get_db)) 
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
-def list_projects(database: Session = Depends(get_db)) -> list[Project]:
+def list_projects(
+    database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> list[Project]:
     statement = select(Project).where(Project.archived_at.is_(None)).order_by(Project.name)
+    if current_user.role != ROLE_ADMIN:
+        statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
     return list(database.scalars(statement))
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
-def read_project(project_id: str, database: Session = Depends(get_db)) -> Project:
-    return get_project_or_404(project_id, database)
+def read_project(project: Project = Depends(require_project_member)) -> Project:
+    return project
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectResponse)
 def update_project(
-    project_id: str, payload: ProjectUpdate, database: Session = Depends(get_db)
+    payload: ProjectUpdate,
+    project: Project = Depends(require_project_member),
+    database: Session = Depends(get_db),
 ) -> Project:
-    project = get_project_or_404(project_id, database)
     values = payload.model_dump(exclude_unset=True)
     if "client_id" in values and values["client_id"] is not None:
         get_client_or_404(values["client_id"], database)
@@ -257,8 +580,9 @@ def update_project(
 
 
 @router.post("/projects/{project_id}/archive", response_model=ProjectResponse)
-def archive_project(project_id: str, database: Session = Depends(get_db)) -> Project:
-    project = get_project_or_404(project_id, database)
+def archive_project(
+    project: Project = Depends(require_project_owner), database: Session = Depends(get_db)
+) -> Project:
     project.archived_at = datetime.now(timezone.utc)
     database.commit()
     database.refresh(project)
@@ -266,15 +590,24 @@ def archive_project(project_id: str, database: Session = Depends(get_db)) -> Pro
 
 
 @router.get("/admin/projects/archived", response_model=list[ArchivedProjectResponse])
-def list_archived_projects(database: Session = Depends(get_db)) -> list[ArchivedProjectResponse]:
+def list_archived_projects(
+    database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> list[ArchivedProjectResponse]:
+    if current_user.role == ROLE_USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
+        )
     _sweep_expired_archives(database)
     settings = get_settings()
     retention = timedelta(days=settings.archive_retention_days)
     warning_window = timedelta(days=settings.archive_purge_warning_days)
     now = datetime.now(timezone.utc)
-    projects = database.scalars(
+    statement = (
         select(Project).where(Project.archived_at.is_not(None)).order_by(Project.archived_at.desc())
     )
+    if current_user.role != ROLE_ADMIN:
+        statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
+    projects = database.scalars(statement)
     responses = []
     for project in projects:
         archived_at = _as_utc(cast(datetime, project.archived_at))
@@ -289,11 +622,29 @@ def list_archived_projects(database: Session = Depends(get_db)) -> list[Archived
     return responses
 
 
-@router.post("/admin/projects/{project_id}/restore", response_model=ProjectResponse)
-def restore_archived_project(project_id: str, database: Session = Depends(get_db)) -> Project:
+def _require_archived_project_owner(
+    database: Session, project_id: str, current_user: User
+) -> Project:
+    """Like require_project_owner, but for a project that IS archived (that
+    dependency 404s on archived projects, since it's meant for the common
+    active-project case)."""
     project = database.get(Project, project_id)
     if project is None or project.archived_at is None:
         raise HTTPException(status_code=404, detail="Archived project not found")
+    if not is_project_owner(project, current_user):
+        if not is_project_member(database, project, current_user):
+            raise HTTPException(status_code=404, detail="Archived project not found")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Project owner required")
+    return project
+
+
+@router.post("/admin/projects/{project_id}/restore", response_model=ProjectResponse)
+def restore_archived_project(
+    project_id: str,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Project:
+    project = _require_archived_project_owner(database, project_id, current_user)
     project.archived_at = None
     database.commit()
     database.refresh(project)
@@ -301,10 +652,12 @@ def restore_archived_project(project_id: str, database: Session = Depends(get_db
 
 
 @router.delete("/admin/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-def purge_archived_project(project_id: str, database: Session = Depends(get_db)) -> None:
-    project = database.get(Project, project_id)
-    if project is None or project.archived_at is None:
-        raise HTTPException(status_code=404, detail="Archived project not found")
+def purge_archived_project(
+    project_id: str,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    project = _require_archived_project_owner(database, project_id, current_user)
     # _purge_project relies on the schema's ON DELETE CASCADE foreign keys to
     # remove every dependent row server-side via a single bulk DELETE.
     # Loading the object graph through the ORM instead (database.delete)
@@ -384,8 +737,8 @@ async def upload_file(
     project_id: str,
     file: UploadFile = File(...),
     database: Session = Depends(get_db),
+    project: Project = Depends(require_project_member),
 ) -> SourceFile:
-    project = get_project_or_404(project_id, database)
     return await _upload_source_file(project, file, database, document_group_id=None)
 
 
@@ -399,8 +752,8 @@ async def replace_file(
     file_id: str,
     file: UploadFile = File(...),
     database: Session = Depends(get_db),
+    project: Project = Depends(require_project_member),
 ) -> SourceFile:
-    project = get_project_or_404(project_id, database)
     statement = select(SourceFile).where(
         SourceFile.id == file_id, SourceFile.project_id == project_id
     )
@@ -425,8 +778,11 @@ async def replace_file(
 
 
 @router.get("/projects/{project_id}/files", response_model=list[SourceFileResponse])
-def list_files(project_id: str, database: Session = Depends(get_db)) -> list[SourceFile]:
-    get_project_or_404(project_id, database)
+def list_files(
+    project_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
+) -> list[SourceFile]:
     statement = (
         select(SourceFile)
         .where(SourceFile.project_id == project_id, SourceFile.deleted_at.is_(None))
@@ -437,9 +793,11 @@ def list_files(project_id: str, database: Session = Depends(get_db)) -> list[Sou
 
 @router.get("/projects/{project_id}/files/{file_id}/download")
 def download_file(
-    project_id: str, file_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    file_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> FileResponse:
-    get_project_or_404(project_id, database)
     statement = select(SourceFile).where(
         SourceFile.id == file_id, SourceFile.project_id == project_id
     )
@@ -456,8 +814,12 @@ def download_file(
 
 
 @router.delete("/projects/{project_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_file(project_id: str, file_id: str, database: Session = Depends(get_db)) -> None:
-    get_project_or_404(project_id, database)
+def delete_file(
+    project_id: str,
+    file_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_archive_rights),
+) -> None:
     statement = select(SourceFile).where(
         SourceFile.id == file_id, SourceFile.project_id == project_id
     )
@@ -479,9 +841,11 @@ def delete_file(project_id: str, file_id: str, database: Session = Depends(get_d
     status_code=status.HTTP_201_CREATED,
 )
 def process_file(
-    project_id: str, file_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    file_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> ProcessingJob:
-    get_project_or_404(project_id, database)
     statement = select(SourceFile).where(
         SourceFile.id == file_id, SourceFile.project_id == project_id
     )
@@ -555,9 +919,10 @@ def process_file(
 
 @router.get("/projects/{project_id}/processing", response_model=list[ProcessingJobResponse])
 def list_processing_jobs(
-    project_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> list[ProcessingJob]:
-    get_project_or_404(project_id, database)
     statement = (
         select(ProcessingJob)
         .where(ProcessingJob.project_id == project_id)
@@ -567,15 +932,28 @@ def list_processing_jobs(
 
 
 @router.get("/admin/files/archived", response_model=list[ArchivedSourceFileResponse])
-def list_archived_files(database: Session = Depends(get_db)) -> list[ArchivedSourceFileResponse]:
+def list_archived_files(
+    database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> list[ArchivedSourceFileResponse]:
+    if current_user.role == ROLE_USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
+        )
     _sweep_expired_archives(database)
     settings = get_settings()
     retention = timedelta(days=settings.archive_retention_days)
     warning_window = timedelta(days=settings.archive_purge_warning_days)
     now = datetime.now(timezone.utc)
-    files = database.scalars(
-        select(SourceFile).where(SourceFile.deleted_at.is_not(None)).order_by(SourceFile.deleted_at.desc())
+    statement = (
+        select(SourceFile)
+        .where(SourceFile.deleted_at.is_not(None))
+        .order_by(SourceFile.deleted_at.desc())
     )
+    if current_user.role != ROLE_ADMIN:
+        statement = statement.where(
+            SourceFile.project_id.in_(user_owned_project_ids(database, current_user))
+        )
+    files = database.scalars(statement)
     responses = []
     for source_file in files:
         deleted_at = _as_utc(cast(datetime, source_file.deleted_at))
@@ -590,11 +968,29 @@ def list_archived_files(database: Session = Depends(get_db)) -> list[ArchivedSou
     return responses
 
 
-@router.post("/admin/files/{file_id}/restore", response_model=SourceFileResponse)
-def restore_archived_file(file_id: str, database: Session = Depends(get_db)) -> SourceFile:
+def _require_archived_file_access(
+    database: Session, file_id: str, current_user: User
+) -> SourceFile:
     source_file = database.get(SourceFile, file_id)
     if source_file is None or source_file.deleted_at is None:
         raise HTTPException(status_code=404, detail="Archived file not found")
+    project = database.get(Project, source_file.project_id)
+    if project is None or not is_project_member(database, project, current_user):
+        raise HTTPException(status_code=404, detail="Archived file not found")
+    if current_user.role == ROLE_USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
+        )
+    return source_file
+
+
+@router.post("/admin/files/{file_id}/restore", response_model=SourceFileResponse)
+def restore_archived_file(
+    file_id: str,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SourceFile:
+    source_file = _require_archived_file_access(database, file_id, current_user)
     extension = Path(source_file.original_name).suffix.lower()
     try:
         restored_path = restore_file(
@@ -613,26 +1009,45 @@ def restore_archived_file(file_id: str, database: Session = Depends(get_db)) -> 
 
 
 @router.delete("/admin/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-def purge_archived_file(file_id: str, database: Session = Depends(get_db)) -> None:
-    source_file = database.get(SourceFile, file_id)
-    if source_file is None or source_file.deleted_at is None:
-        raise HTTPException(status_code=404, detail="Archived file not found")
+def purge_archived_file(
+    file_id: str,
+    database: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    source_file = _require_archived_file_access(database, file_id, current_user)
     _purge_file(database, source_file, reason="manual")
     database.commit()
 
 
 @router.get("/admin/purge-history", response_model=list[PurgeHistoryEntryResponse])
-def list_purge_history(database: Session = Depends(get_db)) -> list[PurgeHistoryEntry]:
-    return list(
-        database.scalars(select(PurgeHistoryEntry).order_by(PurgeHistoryEntry.purged_at.desc()))
-    )
+def list_purge_history(
+    database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> list[PurgeHistoryEntry]:
+    if current_user.role == ROLE_USER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
+        )
+    statement = select(PurgeHistoryEntry).order_by(PurgeHistoryEntry.purged_at.desc())
+    if current_user.role != ROLE_ADMIN:
+        # project_id/resource_id cover a still-existing project's file purges;
+        # purged_by_user_id covers a purged *project* itself, where the
+        # ownership row that would otherwise answer "was this mine" is gone.
+        accessible = set(user_owned_project_ids(database, current_user))
+        statement = statement.where(
+            PurgeHistoryEntry.project_id.in_(accessible)
+            | PurgeHistoryEntry.resource_id.in_(accessible)
+            | (PurgeHistoryEntry.purged_by_user_id == current_user.id)
+        )
+    return list(database.scalars(statement))
 
 
 @router.get("/projects/{project_id}/processing/{job_id}", response_model=ProcessingJobResponse)
 def read_processing_job(
-    project_id: str, job_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    job_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> ProcessingJob:
-    get_project_or_404(project_id, database)
     statement = select(ProcessingJob).where(
         ProcessingJob.id == job_id, ProcessingJob.project_id == project_id
     )
@@ -647,9 +1062,11 @@ def read_processing_job(
     response_model=ExtractedDocumentResponse,
 )
 def read_extraction(
-    project_id: str, file_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    file_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> ExtractedDocument:
-    get_project_or_404(project_id, database)
     source_file = database.scalar(
         select(SourceFile).where(SourceFile.id == file_id, SourceFile.project_id == project_id)
     )
@@ -675,8 +1092,8 @@ def create_site_model_revision(
     file_id: str,
     source_crs: str | None = None,
     database: Session = Depends(get_db),
+    project: Project = Depends(require_project_member),
 ) -> ProjectRevision:
-    project = get_project_or_404(project_id, database)
     extraction = database.scalar(
         select(ExtractedDocument)
         .join(SourceFile, SourceFile.id == ExtractedDocument.source_file_id)
@@ -899,9 +1316,10 @@ def _table_row_point(row: dict[str, Any]) -> list[float] | None:
     response_model=list[SiteModelRevisionResponse],
 )
 def list_site_model_revisions(
-    project_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> list[ProjectRevision]:
-    get_project_or_404(project_id, database)
     revisions = list(
         database.scalars(
             select(ProjectRevision)
@@ -933,8 +1351,8 @@ def list_site_model_entities(
     limit: int = 500,
     offset: int = 0,
     database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> list[SiteModelEntity]:
-    get_project_or_404(project_id, database)
     limit = max(1, min(limit, 2000))
     offset = max(0, offset)
     revision = database.scalar(
@@ -967,9 +1385,11 @@ def list_site_model_entities(
 
 @router.get("/projects/{project_id}/site-model/entities/{entity_id}/snippet")
 def get_entity_plan_snippet(
-    project_id: str, entity_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    entity_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> Response:
-    get_project_or_404(project_id, database)
     entity = database.scalar(
         select(SiteModelEntity)
         .join(ProjectRevision, ProjectRevision.id == SiteModelEntity.revision_id)
@@ -1007,8 +1427,8 @@ def compare_site_model_revisions(
     revision_id: str,
     other_revision_id: str,
     database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> dict[str, list[dict[str, Any]]]:
-    get_project_or_404(project_id, database)
     revisions = database.scalars(
         select(ProjectRevision).where(
             ProjectRevision.project_id == project_id,
@@ -1046,8 +1466,8 @@ def create_calculation(
     project_id: str,
     payload: CalculationRequest,
     database: Session = Depends(get_db),
+    project: Project = Depends(require_project_member),
 ) -> CalculationResult:
-    project = get_project_or_404(project_id, database)
     if payload.revision_id is not None:
         revision = database.scalar(
             select(ProjectRevision).where(
@@ -1112,9 +1532,10 @@ def create_calculation(
 
 @router.get("/projects/{project_id}/calculations", response_model=list[CalculationResponse])
 def list_calculations(
-    project_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> list[CalculationResult]:
-    get_project_or_404(project_id, database)
     return list(
         database.scalars(
             select(CalculationResult)
@@ -1128,9 +1549,11 @@ def list_calculations(
     "/projects/{project_id}/calculations/{calculation_id}", response_model=CalculationResponse
 )
 def read_calculation(
-    project_id: str, calculation_id: str, database: Session = Depends(get_db)
+    project_id: str,
+    calculation_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> CalculationResult:
-    get_project_or_404(project_id, database)
     calculation = database.scalar(
         select(CalculationResult).where(
             CalculationResult.id == calculation_id,
@@ -1163,13 +1586,14 @@ def _resolve_revision_ids(
     if requested:
         return requested
     revisions = list(
-        database.scalars(
-            select(ProjectRevision).where(ProjectRevision.project_id == project_id)
-        )
+        database.scalars(select(ProjectRevision).where(ProjectRevision.project_id == project_id))
     )
     job_ids = [revision.source_job_ids[0] for revision in revisions if revision.source_job_ids]
     jobs = (
-        {job.id: job for job in database.scalars(select(ProcessingJob).where(ProcessingJob.id.in_(job_ids)))}
+        {
+            job.id: job
+            for job in database.scalars(select(ProcessingJob).where(ProcessingJob.id.in_(job_ids)))
+        }
         if job_ids
         else {}
     )
@@ -1209,8 +1633,8 @@ def create_summary(
     project_id: str,
     revision_ids: list[str] | None = None,
     database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> ProjectSummary:
-    get_project_or_404(project_id, database)
     resolved_ids = _resolve_revision_ids(project_id, revision_ids, database)
     entities = []
     warnings: list[str] = []
@@ -1225,7 +1649,9 @@ def create_summary(
         ]
     entities_payload = [_entity_payload(entity) for entity in entities]
     content = MockAIProvider().summarize({"entities": entities_payload, "warnings": warnings})
-    summary = ProjectSummary(project_id=project_id, revision_ids=resolved_ids or None, content=content)
+    summary = ProjectSummary(
+        project_id=project_id, revision_ids=resolved_ids or None, content=content
+    )
     database.add(summary)
     database.commit()
     database.refresh(summary)
@@ -1233,8 +1659,11 @@ def create_summary(
 
 
 @router.get("/projects/{project_id}/summaries", response_model=list[SummaryResponse])
-def list_summaries(project_id: str, database: Session = Depends(get_db)) -> list[ProjectSummary]:
-    get_project_or_404(project_id, database)
+def list_summaries(
+    project_id: str,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
+) -> list[ProjectSummary]:
     return list(
         database.scalars(
             select(ProjectSummary)
@@ -1246,9 +1675,11 @@ def list_summaries(project_id: str, database: Session = Depends(get_db)) -> list
 
 @router.post("/projects/{project_id}/questions", response_model=QuestionResponse)
 def ask_question(
-    project_id: str, payload: QuestionRequest, database: Session = Depends(get_db)
+    project_id: str,
+    payload: QuestionRequest,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
 ) -> QuestionAnswer:
-    get_project_or_404(project_id, database)
     intent = route_question(payload.question)
     resolved_ids = _resolve_revision_ids(project_id, payload.revision_ids, database)
     entities_payload: list[dict[str, Any]] = []

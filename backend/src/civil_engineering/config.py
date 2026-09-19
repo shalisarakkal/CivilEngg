@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # How long a purge-history entry (a record of something that was purged,
     # manually or automatically) is kept before it's deleted in turn.
     purge_history_retention_days: int = 365
+    # How long a login session stays valid before it must be re-authenticated.
+    session_ttl_days: int = 7
 
     model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
 

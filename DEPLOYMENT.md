@@ -7,9 +7,11 @@ distinct from the `--reload`/`next dev` developer workflow in the main
 
 ## 1. Scope
 
-Per ADR-002 and ADR-005 in DECISIONS.md, the MVP is a **local, single-user
-deployment**: one instance on one machine, no authentication, no
-multi-tenant or multi-host setup. Because of that:
+Per ADR-002 and ADR-005 in DECISIONS.md, the MVP is a **local
+deployment**: one instance on one machine, no multi-tenant or
+multi-host setup. Phase 15 (ADR-009) added authentication and a
+role/ownership model on top of that — this remains single-machine, but
+is no longer single-user. Because of that:
 
 - There is no cloud/hosting configuration in this document — the "frontend
   and backend hosts" work item from PLAN.md Phase Z is not applicable to a
@@ -54,6 +56,21 @@ Edit `.env` per the checklist in section 4 below, then apply migrations:
 npm run db:upgrade
 ```
 
+Then create the first admin account (Phase 15) — this is a one-time step,
+a no-op if `sysadmin` already exists:
+
+```powershell
+cd backend
+$env:SYSADMIN_INITIAL_PASSWORD = "<a real password, not the example below>"
+uv run python scripts/create_sysadmin.py
+Remove-Item Env:SYSADMIN_INITIAL_PASSWORD
+cd ..
+```
+
+This also backfills any project that predates Phase 15 (no owner) onto
+the new `sysadmin` account — reassign real ownership to a Power User
+account afterward via `PATCH /projects/{id}/owner`.
+
 ## 4. Environment and secrets checklist
 
 - `.env` is already gitignored (`.gitignore`) — never commit it. Only
@@ -68,6 +85,10 @@ npm run db:upgrade
 - Point `LOCAL_STORAGE_PATH` at a durable location you intend to back up
   (see section 6); it defaults to `./storage` relative to wherever the
   backend process starts.
+- `SYSADMIN_INITIAL_PASSWORD` is not a `.env` setting — it's only ever
+  passed as a one-shot shell environment variable to
+  `create_sysadmin.py` (section 3) and unset immediately after, never
+  written to a file.
 - There are no other secrets today: the AI provider is a deterministic
   mock that makes no network calls (ADR-006), so there's no API key to
   manage yet. That changes if/when a real provider is integrated

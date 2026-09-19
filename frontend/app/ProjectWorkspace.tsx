@@ -1,8 +1,13 @@
 "use client";
 
 import { DragEvent, FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 
-type Project = { id: string; name: string; description: string | null; default_unit_system: string };
+import { apiFetch, apiUrl, errorMessage } from "./api";
+import { useAuth } from "./AuthContext";
+
+type Project = { id: string; name: string; description: string | null; default_unit_system: string; owner_id: string | null };
+type ProjectMember = { id: string; user_id: string; username: string; role: "admin" | "power_user" | "user" };
 type SourceFile = { id: string; original_name: string; size_bytes: number; status: string; checksum: string; error_message: string | null; document_group_id: string; superseded_by_id: string | null; uploaded_at: string };
 // An archived project/file is auto-purged once purge_scheduled_at passes,
 // unless it's restored or manually purged first; purge_warning is true once
@@ -21,7 +26,6 @@ type QuestionAnswerRecord = { id: string; question: string; intent: string; answ
 type CalculationType = "slope" | "distance" | "area" | "perimeter";
 type PerimeterGeometryType = "LineString" | "Polygon";
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const defaultGeometry = '{"type":"Point","coordinates":[0,0]}';
 const areaGeometry = '{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}';
 const perimeterGeometry = '{"type":"LineString","coordinates":[[0,0],[10,0],[10,10],[0,10],[0,0]]}';
@@ -201,6 +205,7 @@ function GeometryPreview({
 }
 
 export default function ProjectWorkspace() {
+  const { currentUser, logout } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [files, setFiles] = useState<SourceFile[]>([]);
@@ -210,6 +215,13 @@ export default function ProjectWorkspace() {
   const [apiStatus, setApiStatus] = useState<{ ok: boolean; environment?: string } | null>(null);
   const [projectPendingArchive, setProjectPendingArchive] = useState<Project | null>(null);
   const [projectPendingPurge, setProjectPendingPurge] = useState<Project | null>(null);
+  const [ownerReassignProject, setOwnerReassignProject] = useState<Project | null>(null);
+  const [ownerReassignCandidates, setOwnerReassignCandidates] = useState<ProjectMember[]>([]);
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const [reassigningOwner, setReassigningOwner] = useState(false);
+  const [addCollaboratorProject, setAddCollaboratorProject] = useState<Project | null>(null);
+  const [newCollaboratorUsername, setNewCollaboratorUsername] = useState("");
+  const [addingCollaborator, setAddingCollaborator] = useState(false);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [calculations, setCalculations] = useState<Calculation[]>([]);
@@ -312,11 +324,11 @@ export default function ProjectWorkspace() {
 
   async function loadProjectData(project: Project) {
     const [fileResponse, revisionResponse, calculationResponse, processingResponse, summaryResponse] = await Promise.all([
-      fetch(`${apiUrl}/projects/${project.id}/files`),
-      fetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
-      fetch(`${apiUrl}/projects/${project.id}/calculations`),
-      fetch(`${apiUrl}/projects/${project.id}/processing`),
-      fetch(`${apiUrl}/projects/${project.id}/summaries`),
+      apiFetch(`${apiUrl}/projects/${project.id}/files`),
+      apiFetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
+      apiFetch(`${apiUrl}/projects/${project.id}/calculations`),
+      apiFetch(`${apiUrl}/projects/${project.id}/processing`),
+      apiFetch(`${apiUrl}/projects/${project.id}/summaries`),
     ]);
     if (fileResponse.ok) setFiles(await fileResponse.json());
     const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
@@ -339,12 +351,12 @@ export default function ProjectWorkspace() {
   }
 
   async function loadArchivedFiles() {
-    const response = await fetch(`${apiUrl}/admin/files/archived`);
+    const response = await apiFetch(`${apiUrl}/admin/files/archived`);
     if (response.ok) setArchivedFiles(await response.json());
   }
 
   async function loadArchivedProjects() {
-    const response = await fetch(`${apiUrl}/admin/projects/archived`);
+    const response = await apiFetch(`${apiUrl}/admin/projects/archived`);
     if (response.ok) setArchivedProjects(await response.json());
   }
 
@@ -355,7 +367,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`project-archive:${project.id}`);
     setMessage(`Archiving ${project.name}...`);
     try {
-      const response = await fetch(`${apiUrl}/projects/${project.id}/archive`, { method: "POST" });
+      const response = await apiFetch(`${apiUrl}/projects/${project.id}/archive`, { method: "POST" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `Project archive failed (HTTP ${response.status}).`);
@@ -389,12 +401,82 @@ export default function ProjectWorkspace() {
     }
   }
 
+  async function openOwnerReassign(project: Project) {
+    setNewOwnerId("");
+    setOwnerReassignCandidates([]);
+    setOwnerReassignProject(project);
+    const response = await apiFetch(`${apiUrl}/projects/${project.id}/members`);
+    if (response.ok) {
+      const members: ProjectMember[] = await response.json();
+      setOwnerReassignCandidates(members.filter((member) => member.role === "power_user"));
+    }
+  }
+
+  async function confirmReassignOwner(event: FormEvent) {
+    event.preventDefault();
+    if (!ownerReassignProject || !newOwnerId) return;
+    const project = ownerReassignProject;
+    setReassigningOwner(true);
+    try {
+      const response = await apiFetch(`${apiUrl}/projects/${project.id}/owner`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: newOwnerId }),
+      });
+      if (response.ok) {
+        const updated: Project = await response.json();
+        setProjects(projects.map((item) => (item.id === updated.id ? updated : item)));
+        if (selectedProject?.id === updated.id) setSelectedProject(updated);
+        setMessage(`${project.name}'s owner was changed.`);
+        setOwnerReassignProject(null);
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Could not change the project owner."));
+      }
+    } finally {
+      setReassigningOwner(false);
+    }
+  }
+
+  async function confirmAddCollaborator(event: FormEvent) {
+    event.preventDefault();
+    if (!addCollaboratorProject || !newCollaboratorUsername.trim()) return;
+    const project = addCollaboratorProject;
+    setAddingCollaborator(true);
+    try {
+      const lookup = await apiFetch(
+        `${apiUrl}/users/lookup?${new URLSearchParams({ username: newCollaboratorUsername.trim() })}`,
+      );
+      if (!lookup.ok) {
+        const body = await lookup.json().catch(() => null);
+        setMessage(lookup.status === 404 ? `No user named "${newCollaboratorUsername.trim()}".` : errorMessage(body, "Could not look up that user."));
+        return;
+      }
+      const found: { id: string; username: string } = await lookup.json();
+      const response = await apiFetch(`${apiUrl}/projects/${project.id}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: found.id }),
+      });
+      if (response.ok) {
+        setMessage(`${found.username} was added to ${project.name}.`);
+        setAddCollaboratorProject(null);
+        setNewCollaboratorUsername("");
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Could not add that collaborator."));
+      }
+    } finally {
+      setAddingCollaborator(false);
+    }
+  }
+
   async function restoreArchivedProject(project: Project) {
     if (busyAction === `project-restore:${project.id}`) return;
     setBusyAction(`project-restore:${project.id}`);
     setMessage(`Restoring ${project.name}...`);
     try {
-      const response = await fetch(`${apiUrl}/admin/projects/${project.id}/restore`, { method: "POST" });
+      const response = await apiFetch(`${apiUrl}/admin/projects/${project.id}/restore`, { method: "POST" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `Restore failed (HTTP ${response.status}).`);
@@ -418,7 +500,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`project-purge:${project.id}`);
     setMessage(`Permanently deleting ${project.name}...`);
     try {
-      const response = await fetch(`${apiUrl}/admin/projects/${project.id}`, { method: "DELETE" });
+      const response = await apiFetch(`${apiUrl}/admin/projects/${project.id}`, { method: "DELETE" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `Purge failed (HTTP ${response.status}).`);
@@ -448,7 +530,7 @@ export default function ProjectWorkspace() {
   }
 
   async function loadEntities(projectId: string, revisionId: string): Promise<Entity[]> {
-    const response = await fetch(
+    const response = await apiFetch(
       `${apiUrl}/projects/${projectId}/site-model/revisions/${revisionId}/entities?limit=500`,
     );
     if (!response.ok) return [];
@@ -497,7 +579,7 @@ export default function ProjectWorkspace() {
     setPlanSnippetLoading(true);
     setPlanSnippetError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/projects/${selectedProject.id}/site-model/entities/${highlightedEntityIds[0]}/snippet`,
       );
       if (!response.ok) {
@@ -530,7 +612,7 @@ export default function ProjectWorkspace() {
     }
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/projects`, {
+      const response = await apiFetch(`${apiUrl}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: projectName.trim() }),
@@ -569,7 +651,7 @@ export default function ProjectWorkspace() {
         try {
           const formData = new FormData();
           formData.append("file", file);
-          const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
+          const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/files`, { method: "POST", body: formData });
           if (response.ok) {
             uploadResults.push({ name: file.name, ok: true, detail: "" });
           } else {
@@ -656,7 +738,7 @@ export default function ProjectWorkspace() {
     try {
       const formData = new FormData();
       formData.append("file", replacementFile);
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/projects/${selectedProject.id}/files/${file.id}/replace`,
         { method: "POST", body: formData }
       );
@@ -685,7 +767,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`process:${file.id}`);
     setMessage(`Processing ${file.original_name}...`);
     try {
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
+      const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `File processing failed (HTTP ${response.status}).`);
@@ -713,7 +795,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`delete:${file.id}`);
     setMessage(`Archiving ${file.original_name}...`);
     try {
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
+      const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `File archive failed (HTTP ${response.status}).`);
@@ -736,7 +818,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`restore:${file.id}`);
     setMessage(`Restoring ${file.original_name}...`);
     try {
-      const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
+      const response = await apiFetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `Restore failed (HTTP ${response.status}).`);
@@ -764,7 +846,7 @@ export default function ProjectWorkspace() {
     setBusyAction(`purge:${file.id}`);
     setMessage(`Permanently deleting ${file.original_name}...`);
     try {
-      const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
+      const response = await apiFetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         setMessage(error.detail ?? `Purge failed (HTTP ${response.status}).`);
@@ -825,7 +907,7 @@ export default function ProjectWorkspace() {
       const results = await Promise.all(
         targets.map(async (file): Promise<BatchResult> => {
           try {
-            const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
+            const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}/process`, { method: "POST" });
             if (response.ok) return { name: file.original_name, ok: true, detail: "" };
             const error = await response.json().catch(() => ({}));
             return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
@@ -853,7 +935,7 @@ export default function ProjectWorkspace() {
       const results = await Promise.all(
         targets.map(async (file): Promise<BatchResult> => {
           try {
-            const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
+            const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/files/${file.id}`, { method: "DELETE" });
             if (response.ok) return { name: file.original_name, ok: true, detail: "" };
             const error = await response.json().catch(() => ({}));
             return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
@@ -884,7 +966,7 @@ export default function ProjectWorkspace() {
       const results = await Promise.all(
         targets.map(async (file): Promise<BatchResult> => {
           try {
-            const response = await fetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
+            const response = await apiFetch(`${apiUrl}/admin/files/${file.id}/restore`, { method: "POST" });
             if (response.ok) return { name: file.original_name, ok: true, detail: "" };
             const error = await response.json().catch(() => ({}));
             return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
@@ -914,7 +996,7 @@ export default function ProjectWorkspace() {
       const results = await Promise.all(
         targets.map(async (file): Promise<BatchResult> => {
           try {
-            const response = await fetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
+            const response = await apiFetch(`${apiUrl}/admin/files/${file.id}`, { method: "DELETE" });
             if (response.ok) return { name: file.original_name, ok: true, detail: "" };
             const error = await response.json().catch(() => ({}));
             return { name: file.original_name, ok: false, detail: error.detail ?? `HTTP ${response.status}` };
@@ -940,7 +1022,7 @@ export default function ProjectWorkspace() {
     setAcceptingFileId(file.id);
     setMessage(`Accepting revision for ${file.original_name}...`);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiUrl}/projects/${selectedProject.id}/site-model/revisions/from-extraction/${file.id}`,
         { method: "POST" },
       );
@@ -986,7 +1068,7 @@ export default function ProjectWorkspace() {
           continue;
         }
         try {
-          const response = await fetch(
+          const response = await apiFetch(
             `${apiUrl}/projects/${selectedProject.id}/site-model/revisions/from-extraction/${file.id}`,
             { method: "POST" },
           );
@@ -1036,7 +1118,7 @@ export default function ProjectWorkspace() {
     }
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/calculations`, {
+      const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/calculations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ calculation_type: calculationType, inputs, coordinate_unit: coordinateUnit, unit: calculationUnit, revision_id: revisions[0]?.id }),
@@ -1063,7 +1145,7 @@ export default function ProjectWorkspace() {
       const params = new URLSearchParams();
       qaRevisionIds.forEach((id) => params.append("revision_ids", id));
       const query = params.toString() ? `?${params.toString()}` : "";
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/summaries${query}`, { method: "POST" });
+      const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/summaries${query}`, { method: "POST" });
       if (response.ok) {
         const created: Summary = await response.json();
         setSummaryHistory((current) => [created, ...current]);
@@ -1084,7 +1166,7 @@ export default function ProjectWorkspace() {
     if (!selectedProject || !questionText.trim()) return;
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/projects/${selectedProject.id}/questions`, {
+      const response = await apiFetch(`${apiUrl}/projects/${selectedProject.id}/questions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1125,7 +1207,7 @@ export default function ProjectWorkspace() {
 
   useEffect(() => {
     async function loadInitialProjects() {
-      const response = await fetch(`${apiUrl}/projects`);
+      const response = await apiFetch(`${apiUrl}/projects`);
       if (!response.ok) {
         setMessage("Could not load projects. Check that the API is running.");
         return;
@@ -1141,7 +1223,7 @@ export default function ProjectWorkspace() {
 
     async function loadApiStatus() {
       try {
-        const response = await fetch(`${apiUrl}/health`);
+        const response = await apiFetch(`${apiUrl}/health`);
         if (!response.ok) {
           setApiStatus({ ok: false });
           return;
@@ -1155,9 +1237,13 @@ export default function ProjectWorkspace() {
 
     async function loadInitialData() {
       await Promise.all([loadInitialProjects(), loadApiStatus()]);
-      const archiveResponse = await fetch(`${apiUrl}/admin/files/archived`);
+      // Both endpoints 403 for a plain "user" role (no archive/purge rights
+      // anywhere) -- skip the request rather than let it fail silently and
+      // show a misleading "0 archived" empty state.
+      if (currentUser.role === "user") return;
+      const archiveResponse = await apiFetch(`${apiUrl}/admin/files/archived`);
       if (archiveResponse.ok) setArchivedFiles(await archiveResponse.json());
-      const archivedProjectsResponse = await fetch(`${apiUrl}/admin/projects/archived`);
+      const archivedProjectsResponse = await apiFetch(`${apiUrl}/admin/projects/archived`);
       if (archivedProjectsResponse.ok) setArchivedProjects(await archivedProjectsResponse.json());
     }
 
@@ -1172,7 +1258,15 @@ export default function ProjectWorkspace() {
     <main className="workspace">
       <header className="topbar">
         <div><p className="eyebrow">Civil engineering intelligence</p><h1>Project workspace</h1></div>
-        <span className={`status ${apiStatus && !apiStatus.ok ? "status-error" : ""}`}>{apiStatus === null ? "Checking API..." : apiStatus.ok ? `API connected · ${apiStatus.environment}` : "API unreachable"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span className={`status ${apiStatus && !apiStatus.ok ? "status-error" : ""}`}>{apiStatus === null ? "Checking API..." : apiStatus.ok ? `API connected · ${apiStatus.environment}` : "API unreachable"}</span>
+          <span className="muted">{currentUser.username} · {currentUser.role.replace("_", " ")}</span>
+          <Link href="/account" className="secondary-button">Change password</Link>
+          {currentUser.role === "admin" && (
+            <Link href="/admin/users" className="secondary-button">Manage users</Link>
+          )}
+          <button type="button" className="secondary-button" onClick={() => void logout()}>Sign out</button>
+        </div>
       </header>
       <p className="message" role="status">
         {message}
@@ -1203,12 +1297,12 @@ export default function ProjectWorkspace() {
             {projects.length === 0 && <p className="muted">No projects yet.</p>}
             {projects.map((project) => <button className={`project-item ${selectedProject?.id === project.id ? "selected" : ""}`} key={project.id} onClick={() => void selectProject(project)}><span>{project.name}</span><small>{project.default_unit_system}</small></button>)}
           </div>
-          <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.length > 0 && <div className="archive-controls"><label className="select-all"><input type="checkbox" checked={archivedFiles.length > 0 && archivedFiles.every((file) => selectedArchivedFileIds.has(file.id))} onChange={toggleSelectAllArchivedFiles} disabled={batchBusy !== null} /><span>Select all</span></label>{selectedArchivedFileIds.size > 0 && <div className="batch-toolbar-mini"><button disabled={batchBusy !== null} onClick={() => void restoreSelectedArchivedFiles()}>{batchBusy === "restore" ? "Restoring..." : `Restore (${selectedArchivedFileIds.size})`}</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id)))}>{`Purge (${selectedArchivedFileIds.size})`}</button></div>}</div>}{archivedFiles.map((file) => <div className="archive-row" key={file.id}><div className="archive-row-top"><input type="checkbox" checked={selectedArchivedFileIds.has(file.id)} onChange={() => toggleArchivedFileSelection(file.id)} disabled={batchBusy !== null} /><strong>{file.original_name}</strong></div><small className={file.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(file.purge_scheduled_at)}</small><div><button disabled={busyAction === `restore:${file.id}` || batchBusy !== null} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}` || batchBusy !== null} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
-          <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><small className={project.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(project.purge_scheduled_at)}</small><div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>
+          {currentUser.role !== "user" && <section className="admin-panel"><p className="eyebrow">Archived files</p><p className="muted">{archivedFiles.length} archived file{archivedFiles.length === 1 ? "" : "s"}</p>{archivedFiles.length > 0 && <div className="archive-controls"><label className="select-all"><input type="checkbox" checked={archivedFiles.length > 0 && archivedFiles.every((file) => selectedArchivedFileIds.has(file.id))} onChange={toggleSelectAllArchivedFiles} disabled={batchBusy !== null} /><span>Select all</span></label>{selectedArchivedFileIds.size > 0 && <div className="batch-toolbar-mini"><button disabled={batchBusy !== null} onClick={() => void restoreSelectedArchivedFiles()}>{batchBusy === "restore" ? "Restoring..." : `Restore (${selectedArchivedFileIds.size})`}</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(archivedFiles.filter((file) => selectedArchivedFileIds.has(file.id)))}>{`Purge (${selectedArchivedFileIds.size})`}</button></div>}</div>}{archivedFiles.map((file) => <div className="archive-row" key={file.id}><div className="archive-row-top"><input type="checkbox" checked={selectedArchivedFileIds.has(file.id)} onChange={() => toggleArchivedFileSelection(file.id)} disabled={batchBusy !== null} /><strong>{file.original_name}</strong></div><small className={file.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(file.purge_scheduled_at)}</small><div><button disabled={busyAction === `restore:${file.id}` || batchBusy !== null} onClick={() => void restoreArchivedFile(file)}>{busyAction === `restore:${file.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `purge:${file.id}` || batchBusy !== null} onClick={() => void purgeArchivedFile(file)}>{busyAction === `purge:${file.id}` ? "Purging..." : "Purge"}</button></div></div>)}</section>}
+          {currentUser.role !== "user" && <section className="admin-panel"><p className="eyebrow">Archived projects</p><p className="muted">{archivedProjects.length} archived project{archivedProjects.length === 1 ? "" : "s"}</p>{archivedProjects.map((project) => <div className="archive-row" key={project.id}><strong>{project.name}</strong><small className={project.purge_warning ? "purge-countdown purge-countdown-warning" : "purge-countdown"}>{formatPurgeCountdown(project.purge_scheduled_at)}</small>{(currentUser.role === "admin" || currentUser.id === project.owner_id) && <div><button disabled={busyAction === `project-restore:${project.id}`} onClick={() => void restoreArchivedProject(project)}>{busyAction === `project-restore:${project.id}` ? "Restoring..." : "Restore"}</button><button className="danger-button" disabled={busyAction === `project-purge:${project.id}`} onClick={() => setProjectPendingPurge(project)}>{busyAction === `project-purge:${project.id}` ? "Purging..." : "Purge"}</button></div>}</div>)}</section>}
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
-            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button></div>
+            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><div style={{ display: "flex", gap: 12 }}>{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => { setNewCollaboratorUsername(""); setAddCollaboratorProject(selectedProject); }}>Add collaborator</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openOwnerReassign(selectedProject)}>Reassign owner</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button>}</div></div>
             <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" disabled={uploading} onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><div className="upload-form-actions"><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button>{pendingFiles.length > 0 && <button type="button" className="secondary-button" disabled={loading} onClick={cancelFileSelection}>Cancel</button>}</div></form></div>
             <div className="file-list">
               <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
@@ -1221,12 +1315,12 @@ export default function ProjectWorkspace() {
                 <span>{selectedFileIds.size} selected</span>
                 <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => void processSelectedFiles()}>{batchBusy === "process" ? "Processing..." : "Process selected"}</button>
                 <button type="button" className="secondary-button" disabled={batchBusy !== null || acceptingFileId !== null} onClick={() => void acceptSelectedFiles()}>{batchBusy === "accept" ? "Accepting..." : "Accept selected"}</button>
-                <button type="button" className="danger-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(files.filter((file) => selectedFileIds.has(file.id)))}>Archive selected</button>
+                {currentUser.role !== "user" && <button type="button" className="danger-button" disabled={batchBusy !== null} onClick={() => setFilesPendingBatchDelete(files.filter((file) => selectedFileIds.has(file.id)))}>Archive selected</button>}
                 <button type="button" className="secondary-button" disabled={batchBusy !== null} onClick={() => setSelectedFileIds(new Set())}>Clear selection</button>
               </div>}
               {files.length === 0 && <p className="muted">Uploaded files will appear here.</p>}
               {files.length > 0 && visibleFiles.length === 0 && <p className="muted">No files match the current filter.</p>}
-              {visibleFiles.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><label className="file-select"><input type="checkbox" checked={selectedFileIds.has(file.id)} onChange={() => toggleFileSelection(file.id)} disabled={batchBusy !== null} /></label><div className="file-info"><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null || batchBusy !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" disabled={batchBusy !== null} onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}<button className="danger-button" disabled={busyAction === `delete:${file.id}` || batchBusy !== null} onClick={() => void deleteFile(file)}>Archive</button></div></div>; })}
+              {visibleFiles.map((file) => { const fileWarnings = latestJobWarnings(processingJobs, file.id); const isSuperseded = file.superseded_by_id !== null; return <div className="file-row" key={file.id}><label className="file-select"><input type="checkbox" checked={selectedFileIds.has(file.id)} onChange={() => toggleFileSelection(file.id)} disabled={batchBusy !== null} /></label><div className="file-info"><strong>{file.original_name}</strong><small>{Math.ceil(file.size_bytes / 1024)} KB · {file.checksum}</small>{isSuperseded && <small className="file-superseded">Replaced by a newer version</small>}{file.status === "failed" && file.error_message && <small className="file-error">{file.error_message}</small>}{file.status === "completed" && fileWarnings.length > 0 && summarizeWarnings(fileWarnings).map((warning, index) => <small className="file-warning" key={index}>{warning}</small>)}{replacingFileId === file.id && <div className="replace-row"><label className="file-picker" htmlFor={`replace-${file.id}`}><span>{replacementFile?.name ?? "Choose a replacement file"}</span><input id={`replace-${file.id}`} type="file" accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" onChange={(event) => setReplacementFile(event.target.files?.[0] ?? null)} /></label><button disabled={busyAction !== null || replacementFile === null} onClick={() => void replaceFile(file)}>{busyAction === `replace:${file.id}` ? "Uploading..." : "Upload replacement"}</button><button className="secondary-button" onClick={() => { setReplacingFileId(null); setReplacementFile(null); }}>Cancel</button></div>}</div><div className="file-status"><span>{processingStatusLabel(file.status, fileWarnings.length > 0)}</span>{file.status === "queued" && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Process"}</button>}{(file.status === "failed" || file.status === "processing") && <button disabled={busyAction === `process:${file.id}` || batchBusy !== null} onClick={() => void processFile(file)}>{busyAction === `process:${file.id}` ? "Processing..." : "Retry"}</button>}{file.status === "completed" && (acceptedFileIds.includes(file.id) ? <button disabled>Revision accepted</button> : <button disabled={acceptingFileId !== null || batchBusy !== null} onClick={() => void acceptRevision(file)}>{acceptingFileId === file.id ? "Accepting..." : "Accept revision"}</button>)}{!isSuperseded && replacingFileId !== file.id && <button className="secondary-button" disabled={batchBusy !== null} onClick={() => { setReplacingFileId(file.id); setReplacementFile(null); }}>Replace</button>}{currentUser.role !== "user" && <button className="danger-button" disabled={busyAction === `delete:${file.id}` || batchBusy !== null} onClick={() => void deleteFile(file)}>Archive</button>}</div></div>; })}
             </div>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Site model</p><h3>Revision geometry</h3>{revisions.length > 0 && <label className="revision-selector">Revision<select value={selectedRevisionId ?? ""} onChange={(event) => void selectRevision(event.target.value)}>{revisions.map((revision) => { const sourceFile = revisionSourceFile(revision); return <option key={revision.id} value={revision.id}>Revision {revision.revision_number} · {sourceFile?.original_name ?? "Unknown file"} · {sourceFile?.checksum ?? "Unknown identifier"}</option>; })}</select></label>}</div><span className="section-count">{entities.length} entities</span></div>{revisions.length === 0 ? <p className="muted">Process a file and accept a revision to inspect extracted geometry.</p> : <><GeometryPreview entities={entities} highlightedIds={highlightedEntityIds} onSelect={(entity) => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); setMessage(`Selected ${entity.entity_type} from ${entity.source_reference?.file_name?.toString() ?? "unknown source"}.`); }} /><div className="entity-grid">{visibleEntities.map((entity) => <button className={`entity-card ${entity.validation_status} ${highlightedEntityIds.includes(entity.id) ? "entity-selected" : ""}`} key={entity.id} onClick={() => { setHighlightedEntityIds([entity.id]); setSelectedCalculationId(null); }}><strong>{entity.entity_type}</strong><span>{entity.validation_status}</span>{entity.properties?.semantic_type ? <span className="semantic-type">{String(entity.properties.semantic_type).replace(/_/g, " ")}{entity.properties?.zoning ? ` · ${entity.properties.zoning}` : ""}</span> : null}<small>{entity.entity_type === "key_phrase" ? `"${entity.properties?.phrase}"` : entity.source_reference?.file_name?.toString() ?? "No source reference"}</small></button>)}</div>{entities.length > 0 && <div className="entity-pagination"><span className="muted">Showing {entityPageStart + 1}-{Math.min(entityPageStart + entityPageSize, entities.length)} of {entities.length} entities.</span><div className="entity-pagination-controls"><button className="secondary-button" disabled={entityPage === 0} onClick={() => setEntityPage((page) => Math.max(0, page - 1))}><span aria-hidden="true">←</span> Previous</button><span>Page {entityPage + 1} of {entityPageCount}</span><button className="secondary-button" disabled={entityPage >= entityPageCount - 1} onClick={() => setEntityPage((page) => Math.min(entityPageCount - 1, page + 1))}>Next <span aria-hidden="true">→</span></button></div></div>}{highlightedEntityIds.length > 0 && <div className="plan-snippet"><button type="button" className="secondary-button" disabled={planSnippetLoading} onClick={() => void requestPlanSnippet()}>{planSnippetLoading ? "Loading snippet..." : "View plan-sheet snippet"}</button><p className="muted">Renders the source DXF with the selected entity highlighted in red; only available for DXF-sourced entities.</p>{planSnippetError && <p className="muted">{planSnippetError}</p>}{planSnippetUrl && <img className="plan-snippet-image" src={planSnippetUrl} alt="Highlighted plan-sheet snippet" />}</div>}</>}</section>
             <section className="workspace-section"><div className="section-heading"><div><p className="eyebrow">Calculations</p><h3>Run a deterministic check.</h3><p className="calculation-help">Distance uses two geometries. Area accepts Polygon, MultiPolygon, or Circle JSON. Perimeter accepts LineString, Polygon, or Circle JSON. A Circle uses center and radius in the selected coordinate unit.</p></div></div><form className="calculation-form" onSubmit={createCalculation}><label>Calculation<select value={calculationType} onChange={(event) => changeCalculationType(event.target.value as CalculationType)}><option value="slope">Slope</option><option value="distance">Distance</option><option value="area">Area</option><option value="perimeter">Perimeter</option></select></label><label>Coordinate unit<select value={coordinateUnit} onChange={(event) => setCoordinateUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label><label>Output unit<select value={calculationUnit} onChange={(event) => setCalculationUnit(event.target.value)}><option value="ft">Feet</option><option value="m">Meters</option><option value="in">Inches</option></select></label>{calculationType === "slope" ? <div className="calculation-fields"><label>Start elevation<input value={startElevation} onChange={(event) => setStartElevation(event.target.value)} /></label><label>End elevation<input value={endElevation} onChange={(event) => setEndElevation(event.target.value)} /></label><label>Horizontal distance<input value={horizontalDistance} onChange={(event) => setHorizontalDistance(event.target.value)} /></label></div> : <div className="geometry-fields">{calculationType === "perimeter" && <label>Perimeter geometry<select value={perimeterGeometryType} onChange={(event) => changePerimeterGeometryType(event.target.value as PerimeterGeometryType)}><option value="LineString">LineString (open path)</option><option value="Polygon">Polygon (closed boundary)</option></select></label>}<label>Geometry JSON<textarea value={geometry} onChange={(event) => setGeometry(event.target.value)} rows={3} /></label>{calculationType === "distance" && <label>Second geometry JSON<textarea value={secondGeometry} onChange={(event) => setSecondGeometry(event.target.value)} rows={3} /></label>}</div>}<button type="submit" disabled={loading}>Run calculation</button></form>{calculations.length > 0 && <div className="calculation-results">{calculations.slice(0, 5).map((calculation) => <button type="button" className={`result-row ${selectedCalculationId === calculation.id ? "result-selected" : ""}`} key={calculation.id} onClick={() => void selectCalculationResult(calculation)}><strong>{calculation.calculation_type}</strong><span>{calculation.result.toFixed(3)} {calculation.unit}</span><small>{calculation.formula}<span className="result-inputs">{formatCalculationInputs(calculation.inputs)}</span></small></button>)}</div>}</section>
@@ -1238,6 +1332,8 @@ export default function ProjectWorkspace() {
         </section>
       </section>
       {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive, along with everything in it — its files, revisions, calculations, summaries, and questions become inaccessible until you restore it. Nothing is deleted; restoring brings it all back exactly as it was.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}
+      {addCollaboratorProject && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="add-collaborator-title"><p className="eyebrow">Add collaborator</p><h3 id="add-collaborator-title">Add a collaborator to {addCollaboratorProject.name}?</h3><p className="muted">They get full working access (upload, process, calculate, ask questions); a Power User also gets archive/purge rights. Enter their exact username.</p><form onSubmit={confirmAddCollaborator}><label htmlFor="new-collaborator-username">Username</label><input id="new-collaborator-username" value={newCollaboratorUsername} onChange={(event) => setNewCollaboratorUsername(event.target.value)} required autoFocus /><div className="modal-actions"><button type="button" className="secondary-button" disabled={addingCollaborator} onClick={() => setAddCollaboratorProject(null)}>Cancel</button><button type="submit" className="danger-button" disabled={addingCollaborator || !newCollaboratorUsername.trim()}>{addingCollaborator ? "Adding..." : "Add collaborator"}</button></div></form></section></div>}
+      {ownerReassignProject && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="owner-reassign-title"><p className="eyebrow">Reassign owner</p><h3 id="owner-reassign-title">Change the owner of {ownerReassignProject.name}?</h3><p className="muted">The new owner must be a Power User already collaborating on this project. Ownership moves to them immediately; you keep your own access unless removed separately.</p>{ownerReassignCandidates.length === 0 ? <p className="muted">No Power User collaborators on this project yet — use &quot;Add collaborator&quot; first.</p> : <form onSubmit={confirmReassignOwner}><label htmlFor="new-owner">New owner</label><select id="new-owner" value={newOwnerId} onChange={(event) => setNewOwnerId(event.target.value)} required><option value="" disabled>Choose a Power User</option>{ownerReassignCandidates.map((member) => <option key={member.user_id} value={member.user_id}>{member.username}</option>)}</select><div className="modal-actions"><button type="button" className="secondary-button" disabled={reassigningOwner} onClick={() => setOwnerReassignProject(null)}>Cancel</button><button type="submit" className="danger-button" disabled={reassigningOwner || !newOwnerId}>{reassigningOwner ? "Changing..." : "Change owner"}</button></div></form>}{ownerReassignCandidates.length === 0 && <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setOwnerReassignProject(null)}>Close</button></div>}</section></div>}
       {projectPendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="project-purge-title">Permanently delete {projectPendingPurge.name}?</h3><p className="muted">This removes the project, all its files, revisions, calculations, summaries, and questions, and its on-disk storage — permanently. This cannot be undone.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => setProjectPendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => void confirmPurgeArchivedProject()}>{busyAction === `project-purge:${projectPendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
       {archivedFilesPendingBatchPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="batch-purge-title">Permanently delete {archivedFilesPendingBatchPurge.length} file{archivedFilesPendingBatchPurge.length === 1 ? "" : "s"}?</h3><p className="muted">{archivedFilesPendingBatchPurge.map((file) => file.original_name).join(", ")}</p><p className="muted">This removes each archived file and its metadata. Accepted revisions and calculations remain, but the original sources cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchPurgeArchivedFiles()}>{batchBusy === "purge" ? "Purging..." : "Permanently delete"}</button></div></section></div>}
     </main>

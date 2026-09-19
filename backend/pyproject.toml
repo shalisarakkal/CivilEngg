@@ -5,6 +5,7 @@ description = "FastAPI backend for the Civil Engineering AI application"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.15,<2",
+  "bcrypt>=4.1,<5",
   "fastapi>=0.115,<1",
   "ezdxf>=1.4,<2",
   "pillow>=11,<12",

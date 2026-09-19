@@ -1,5 +1,10 @@
+import { AuthProvider } from "./AuthContext";
 import ProjectWorkspace from "./ProjectWorkspace";
 
 export default function Home() {
-  return <ProjectWorkspace />;
+  return (
+    <AuthProvider>
+      <ProjectWorkspace />
+    </AuthProvider>
+  );
 }

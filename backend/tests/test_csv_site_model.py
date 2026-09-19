@@ -1,12 +1,14 @@
 from collections.abc import Generator
 from pathlib import Path
 
+from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from civil_engineering.auth import get_current_user
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 
@@ -30,6 +32,7 @@ def test_csv_rows_are_aggregated_or_mapped(tmp_path: Path, monkeypatch: MonkeyPa
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         project = client.post("/projects", json={"name": "CSV Site"}).json()
@@ -79,6 +82,7 @@ def test_csv_point_elevation_is_kept_as_the_z_coordinate(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         project = client.post("/projects", json={"name": "Elevation Site"}).json()

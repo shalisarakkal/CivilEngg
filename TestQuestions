@@ -1,0 +1,147 @@
+Project / document questions
+
+These test whether your application correctly understands the source document.
+
+What is the project name?
+What is the sheet number?
+What is the revision number?
+What is the drawing date?
+What scale is the drawing?
+What units are used?
+Is this drawing marked as construction-ready?
+How many sheets are included?
+What type of drawing is this?
+What features are shown in the legend?
+2. Property questions
+
+These test extracted dimensions and geometry.
+
+What are the property dimensions?
+What is the property area?
+What is the property perimeter?
+What is the front property-line length?
+What is the side property-line length?
+What are the required setbacks?
+What is the front setback?
+What is the side setback?
+What is the rear setback?
+Where is the utility easement located?
+What is the width of the utility easement?
+What portion of the property is affected by the utility easement?
+3. Building questions
+
+These are particularly good for testing geometry extraction.
+
+What are the building dimensions?
+What is the building footprint area?
+What is the building perimeter?
+Where is the building located within the property?
+What is the distance from the building to the property boundaries?
+Does the building appear to be within the indicated setbacks?
+What is the building's width?
+What is the building's length?
+What is the orientation of the building?
+Is there a concrete patio associated with the building?
+4. Parking questions
+How many parking spaces are shown?
+What is the approximate parking-lot area?
+Where is the parking lot located?
+What is the driveway width?
+How many parking spaces are directly accessible from the driveway?
+What is the parking area relative to the building?
+What pavement areas are shown?
+What is the approximate total paved area?
+5. Site-feature questions
+How many existing trees are shown?
+Where are the trees located?
+Is a stormwater detention basin shown?
+Where is the detention basin?
+What type of sidewalk is shown?
+What is the sidewalk width?
+Is a utility easement shown?
+What other site improvements are shown?
+6. Elevation questions
+
+These are useful for testing numeric extraction.
+
+What elevation values are shown?
+What is the highest spot elevation?
+What is the lowest spot elevation?
+What is the elevation difference between EL 102.5 and EL 101.0?
+What is the elevation difference between the highest and lowest shown points?
+Where is EL 102.5 located?
+Where is EL 101.0 located?
+Where is EL 103.2 located?
+7. Deterministic calculation tests
+
+These are especially valuable because your application should calculate these rather than have an LLM guess them.
+
+For example:
+
+Property area
+
+Calculate the property area from the extracted dimensions.
+
+Expected calculation:
+
+200 ft × 150 ft = 30,000 sq ft
+
+Building area
+
+Calculate the proposed building footprint.
+
+Expected:
+
+80 ft × 50 ft = 4,000 sq ft
+
+Building perimeter
+
+Calculate the building perimeter.
+
+Expected:
+
+2 × (80 + 50) = 260 ft
+
+Property perimeter
+
+Calculate the property perimeter.
+
+Expected:
+
+2 × (200 + 150) = 700 ft
+
+Elevation difference
+
+Calculate the elevation difference between EL 103.2 and EL 101.0.
+
+Expected:
+
+2.2 ft
+
+8. Cross-source questions
+
+These are very important for your source-grounded AI.
+
+Try questions such as:
+
+What is the building footprint area, and which dimensions on the plan support that calculation?
+
+What are the property dimensions and where are they documented?
+
+What is the driveway width?
+
+What is the relationship between the building and the utility easement?
+
+What site features are located outside the building footprint?
+
+List all numeric dimensions shown on the plan.
+
+List all elevation values and their locations.
+
+Identify every feature that has an associated dimension.
+
+Your answer should ideally contain citations back to the source region/page/object, rather than simply giving an answer.
+
+9. Review/extraction-error tests
+
+This is where I would deliberately introduce errors into your application's extracted model.

@@ -65,4 +65,4 @@ User
 
 ## Initial Deployment Boundary
 
-The first deployment is intended for local, single-user use. Authentication, billing, cloud storage, and horizontal scaling are post-MVP concerns unless Phase 0 changes this decision.
+The first deployment is intended for local, single-machine use, with session-cookie authentication and an admin/power_user/user role model added in Phase 15 (ADR-009). Billing, cloud storage, and horizontal scaling remain post-MVP concerns.

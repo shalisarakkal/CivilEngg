@@ -27,6 +27,7 @@ The frontend is a single Next.js app under `frontend/`, run via npm workspaces f
 | Alembic | 1.20.0 | Database migrations |
 | Pydantic / pydantic-settings | 2.13.5 / 2.15.0 | Request/response schemas, environment-driven settings (`config.py`) |
 | python-multipart | 0.0.32 | Multipart file-upload parsing |
+| bcrypt | 4.3.0 | Password hashing (Phase 15 authentication) |
 
 ## Database
 
@@ -87,7 +88,7 @@ A real network-calling provider (e.g. OpenAI) is deferred; the provider interfac
 
 ## Deployment Model
 
-- Local-only, single-user MVP: no authentication (ADR-005 in DECISIONS.md), local file storage under a configurable directory, CORS origins configurable via `CORS_ALLOWED_ORIGINS`.
+- Local-only MVP: session-cookie authentication with an admin/power_user/user role model and per-project ownership (Phase 15, ADR-009 in DECISIONS.md), local file storage under a configurable directory, CORS origins configurable via `CORS_ALLOWED_ORIGINS`.
 - No containerization, CI/CD pipeline, or hosting platform is configured yet (Phase Z in PLAN.md).
 - No error/analytics tracking (Sentry/PostHog) or payment processing (Stripe) is integrated — these appear only as future/post-MVP items (PLAN.md's Post-MVP Roadmap), not shipped.
 
@@ -100,6 +101,6 @@ Named in AGENTS.md's original architecture brief and/or PLAN.md's initial "Techn
 - NumPy, SciPy, Pandas, GeoPandas — no shipped path needs them (PLAN.md §3)
 - Native PostGIS geometry types — plain JSON geometry used instead, despite PostGIS being installed and migration-enabled (PLAN.md §3)
 - A real AI provider (OpenAI or otherwise) — a deterministic mock provider is used instead (DECISIONS.md, RISK_REGISTER.md)
-- Clerk / Auth0 — no authentication is implemented; single-user local MVP (AGENTS.md, DECISIONS.md ADR-005)
+- Clerk / Auth0 — authentication is implemented in-house instead (session cookies + bcrypt, Phase 15/ADR-009), not via a third-party identity provider
 - Stripe — no payment processing (AGENTS.md)
 - Sentry / PostHog — no error or analytics tracking yet; listed as a post-MVP roadmap item (PLAN.md)

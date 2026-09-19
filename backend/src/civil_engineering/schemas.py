@@ -27,6 +27,10 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     default_unit_system: str = Field(default="imperial", max_length=32)
     coordinate_reference_system: str | None = Field(default=None, max_length=100)
+    # Only meaningful when the caller is an admin (must name a power_user);
+    # a power_user caller always becomes owner of their own new project and
+    # this field is ignored for them. See create_project in routes.py.
+    owner_id: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -42,6 +46,7 @@ class ProjectResponse(BaseModel):
 
     id: str
     client_id: str | None
+    owner_id: str | None
     name: str
     description: str | None
     default_unit_system: str
@@ -93,6 +98,7 @@ class PurgeHistoryEntryResponse(BaseModel):
     archived_at: datetime | None
     purge_reason: str
     purged_at: datetime
+    purged_by_user_id: str | None
 
 
 class ProcessingJobResponse(BaseModel):
@@ -197,3 +203,58 @@ class QuestionResponse(BaseModel):
     intent: str
     answer: dict[str, object]
     created_at: datetime
+
+
+ROLE_PATTERN = "^(admin|power_user|user)$"
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1)
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8)
+    role: str = Field(default="user", pattern=ROLE_PATTERN)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class UserUpdate(BaseModel):
+    role: str | None = Field(default=None, pattern=ROLE_PATTERN)
+    password: str | None = Field(default=None, min_length=8)
+    disabled: bool | None = None
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    username: str
+    role: str
+    created_at: datetime
+    updated_at: datetime
+    disabled_at: datetime | None
+
+
+class ProjectMembershipCreate(BaseModel):
+    user_id: str
+
+
+class ProjectMembershipResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    user_id: str
+    username: str
+    role: str
+    created_at: datetime
+
+
+class ProjectOwnerUpdate(BaseModel):
+    owner_id: str

@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0016_unique_extraction_revision (head)
+0018_add_purge_history_purged_by (head)
 ```
 
 Return to the project root:
@@ -360,7 +360,7 @@ Do not commit generated local data, `.env`, uploads, or secrets.
 - Processing is synchronous for the MVP; background processing is deferred.
 - Elevation statistics are available through the calculations API.
 - User deletion archives the physical file; admin restore and permanent purge are available through the archive panel/API.
-- Authentication is not enabled (ADR-005): the MVP targets single-user, local-only deployment. Authorization boundaries are deferred to a future multi-user release.
+- Authentication and role/ownership-based authorization are enabled as of Phase 15 (ADR-009): admin/power_user/user roles, session-cookie login, and per-project ownership/membership enforced on every endpoint.
 - The AI provider is a deterministic mock (Phase 7): it never calls a real network model, so summaries and answers are limited to what can be computed or retrieved from the site model and extracted text. A real provider (e.g. OpenAI), and its timeout/retry handling, is deferred to a post-MVP release.
 - Test fixtures are synthetic/sanitized files, not real client plan sets (Phase 0 exit criterion still open).
 - Engineering calculation outputs have received a non-licensed technical review (see section 12) and automated hand-verified test coverage in `backend/tests/test_calculations.py`, but have not been reviewed by a licensed civil engineer. Treat calculation results as unverified for real engineering decisions until that review happens.

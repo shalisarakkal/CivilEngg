@@ -66,6 +66,19 @@ This file records decisions that affect the project direction. Add a date, conte
 - **Decision:** The MVP release candidate is Phases 0-11 plus Phase 13's core work (purge history and archive auto-purge retention), on top of the earlier vertical slice (ADR-001). Phase 12 (Activity Events), Phase 13's optional compression item, and everything in the Post-MVP Roadmap (PLAN.md section 8) are explicitly out of scope for this release.
 - **Consequence:** The release candidate ships with the existing single-line status banner (no activity-event log) and without archive/project file compression. See DEPLOYMENT.md for how to run this release.
 
+## ADR-009: Role Model, Session-Cookie Auth, and Ownership (Phase 15)
+
+- **Status:** Accepted
+- **Date:** 2026-09-17
+- **Context:** ADR-005 deferred authentication entirely for the MVP. A real client-site install (CLIENT_INSTALL.md) is one shared, unauthenticated instance with no way to tell users apart — requested directly as the next piece of work, not found via audit. DEPLOYMENT.md already flagged that moving to multi-user changes the trust boundary and needs its own ADR.
+- **Decision:**
+  - **Three roles:** `admin` (everything, every project, user management), `power_user` (full capabilities — including archive/purge — scoped to projects they own or are a member of; auto-becomes owner of a project they create), `user` (project working capabilities — upload, process, calculate, ask questions — but never archive/purge, anywhere).
+  - **Ownership** is a single FK, `Project.owner_id` (not a flag on the membership table), to avoid two sources of truth. A project's owner must be a `power_user`. Deleting/archiving a project and managing its membership are owner(+admin)-only; file-level archive/purge within a project is available to any associated `power_user`, not just the owner.
+  - **Auth mechanism:** server-side sessions (`sessions` table), an opaque UUID as both the row id and the httpOnly cookie value, `bcrypt` password hashing. Chosen over JWTs since it needs no separate revocation-list mechanism — disabling a user or logging out just marks/deletes the session row, checked on every request via `get_current_user`.
+  - **Validation stays app-layer, not DB-layer:** `role` is a plain `String` column (not a DB enum) validated by a Pydantic `Field(pattern=...)`, matching every other status-like field already in this codebase (`SiteModelEntity.validation_status`, `CalculationResult.calculation_type`) rather than introducing a new convention. `Project.owner_id` is nullable at the DB level — required-on-create is enforced in the route, not a `NOT NULL` constraint — since existing project rows predate the `users` table and no user exists yet at migration time to backfill onto (a one-time bootstrap script backfills them onto the seeded `sysadmin` account after migration).
+  - **`purge_history.purged_by_user_id`** stores the purged resource's owner *at the time of purge* (not literally who clicked purge — an automatic retention sweep isn't a click), since the project's own ownership row disappears along with it once purged, and a Power User otherwise has no way to find their own purge history for a fully-deleted project.
+- **Consequence:** Every existing route gained a permission dependency (`require_admin`/`require_project_member`/`require_project_archive_rights`/`require_project_owner`). The 11 pre-existing backend test files needed a one-line `get_current_user` override each (`tests/auth_helpers.py`) to keep testing business logic unaffected by the new permission layer, rather than a full auth-flow retrofit. The frontend gained its first React context, first shared fetch wrapper, and first client-side route (`/login`) — none of which existed before. UI-level role-gating (hiding buttons a role can't use) and Playwright e2e coverage are not yet complete; see PLAN.md Phase 15's open work items. RISK_REGISTER.md's "Unauthenticated local API" row is updated from "Accepted limitation" to "Mitigated."
+
 ## Resolved (not full ADRs)
 
 - Database migration tool: Alembic (`backend/migrations/`).
@@ -75,3 +88,20 @@ This file records decisions that affect the project direction. Add a date, conte
 - Background job mechanism
 - Supported coordinate reference systems
 - DWG parsing strategy
+- **Multi-tenant SaaS (`Tenant` entity above Users/Clients/Projects):**
+  considered, not started — studied in conversation after Phase 15
+  shipped (2026-09-18). This would be a deliberate strategic pivot, not
+  an additive feature: ADR-002/CLIENT_INSTALL.md already give each firm
+  its own installation and database (stronger isolation than any in-app
+  tenant column), and a `Tenant` entity means trading that for a single
+  shared hosted instance. Also a naming collision risk — the existing
+  `Client` model already means "the firm's own customer," while a
+  `Tenant` would mean "the firm paying for this software," a level
+  above it (`Tenant → Client → Project`). Structurally bigger than
+  Phase 15: that added a permission layer on unchanged data, this would
+  partition the data itself, needing every existing query re-audited
+  for tenant scoping and likely Postgres Row-Level Security as a
+  DB-enforced backstop (a deviation from this codebase's usual
+  app-layer-only validation convention, given a tenant leak is a worse
+  severity class than a role-permission leak). Full write-up: PLAN.md
+  Post-MVP Roadmap item 10.

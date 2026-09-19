@@ -91,6 +91,55 @@ This was the direction proposed at Phase 0. As implemented, several choices were
 - [x] A clean checkout passes the initial quality checks
 - [x] Unit tests run with one documented command
 
+Phase 1 lifecycle additions:
+
+- [x] Replace the original `start-dev.ps1` (start-only, `-Stop` bolted on
+  as an afterthought) with `control-dev.ps1`: one script, one `-Action`
+  parameter (`Start`/`Stop`/`Restart`/`Status`), each independently
+  scopable to `-Backend` and/or `-Frontend` (neither switch means both).
+  Prompted directly in conversation, not found via audit.
+- [x] Stop both dev servers in the background instead of opening a
+  visible PowerShell window each (`Start-Process ... -WindowStyle
+  Hidden`), with output going to `logs/backend.log` / `logs/frontend.log`
+  — raised after the visible windows were flagged as unwanted, and, along
+  the way, needed to switch from `*>` file redirection to
+  `2>&1 | Out-File -Encoding utf8` (`*>` defaults to UTF-16, which renders
+  as garbled double-spaced text in `grep`/`tail`/most editors) plus an
+  explicit `[Console]::OutputEncoding` set so Next.js's own box-drawing
+  glyphs (▲/✓/⚠) render correctly instead of as mojibake.
+  A custom `.NET Process`-based capture layer (to allow true live,
+  in-process log rotation) was tried and deliberately dropped: on Windows
+  it silently swallowed uvicorn's real startup/request-log output going
+  through `uv -> uvicorn --reload -> its multiprocessing reload worker`
+  — a correctness regression worse than not having live rotation, caught
+  by manually diffing the resulting log against a known-working run
+  before this shipped.
+- [x] Add configurable log versioning (`-MaxLogSizeMB` default 5,
+  `-MaxLogFiles` default 10): every `Start`/the start-half of `Restart`
+  rotates a service's existing log to `.1` (shifting older numbered
+  backups up, dropping anything past `-MaxLogFiles`), so each run gets a
+  clean live file and past runs stay available. True live rotation
+  (rewriting a log file's content while the writing process keeps running
+  without restarting it) was investigated and intentionally not built —
+  it would mean either fighting the file handle PowerShell's redirection
+  holds open for the process's whole lifetime, or the same custom-capture
+  approach already ruled out above for silently losing output.
+  `-Action Status` instead flags a log once it's past `-MaxLogSizeMB` as
+  a visible signal to restart that service.
+- [x] Fix a real, independently-discovered bug the same day this was
+  built: stopping a server by killing only the PID that owns its listening
+  port left `uvicorn --reload`'s multiprocessing worker process running
+  as an orphan, still holding the port — first hit and manually
+  diagnosed/fixed mid-session (`Get-CimInstance Win32_Process` to find
+  the orphaned child), then generalized into `Stop`'s process-tree walk
+  (`Get-ProcessTreeIds`) so it can't recur for either service.
+- [x] Verified end to end against the real dev environment: `Start`,
+  `Stop`, `Restart` (both services and each scoped individually),
+  `Status` (including the oversized-log flag), log content correctness
+  (UTF-8, full uvicorn/Next.js output present, no data loss versus the
+  original `*>`-redirected/visible-window approach), and log versioning
+  across repeated restarts (`backend.log`, `.log.1`, `.log.2`).
+
 ### Phase 2 - Projects, Clients, Files, and Local Storage
 
 **Objective:** Make project data and source files manageable before adding intelligence.
@@ -416,6 +465,152 @@ Phase 6 lifecycle additions:
 - [ ] At least utility easements, parking, and trees are classified and answerable for location/count where geometry supports it
 - [ ] Document-metadata questions (category 1) are scoped as accepted-limitation or given a concrete extraction plan — decide which before implementation starts
 
+### Phase 15 - Roles, Ownership, and Authentication
+
+**Objective:** The application had no user concept at all (ADR-005): no
+login, no session, no permission check anywhere in the API. Implements
+a three-role model (Admin / Power User / User) with project ownership,
+requested directly rather than found via audit. See ADR-009 in
+DECISIONS.md for the full role/permission matrix and the design choices
+behind it (session-cookie auth, app-layer role validation instead of a
+DB enum, `purge_history.purged_by_user_id`).
+
+**Work items:**
+
+- [x] Add `User`, `Session`, `ProjectMembership` models and
+  `projects.owner_id`; migrations `0017_add_users_roles_ownership` and
+  `0018_add_purge_history_purged_by`
+- [x] Session-cookie authentication (`backend/src/civil_engineering/auth.py`):
+  bcrypt password hashing, server-side sessions, `get_current_user` and
+  role/ownership-aware permission dependencies (`require_admin`,
+  `require_project_member`, `require_project_archive_rights`,
+  `require_project_owner`)
+- [x] `POST/GET /auth/login|logout|me`, `POST/GET/PATCH/DELETE /users`,
+  project membership/ownership-transfer endpoints
+  (`POST/GET/DELETE /projects/{id}/members`, `PATCH /projects/{id}/owner`)
+- [x] Every existing project/client/admin endpoint wired to the
+  appropriate permission dependency (34 handlers)
+- [x] `backend/scripts/create_sysadmin.py` bootstrap script (reads
+  `SYSADMIN_INITIAL_PASSWORD` from the environment, never hardcoded;
+  backfills any pre-existing ownerless project onto the new sysadmin)
+- [x] Backend tests: `tests/test_auth.py` (14 new tests covering login,
+  session expiry-on-disable, the full role/ownership matrix); the 11
+  pre-existing test files patched with a one-line `get_current_user`
+  override (`tests/auth_helpers.py`) so they keep testing business logic
+  unaffected by the new permission layer — all 113 backend tests pass
+- [x] Frontend: `/login` page, `AuthContext` (first React context in
+  this codebase), `apiFetch` wrapper (first shared fetch helper — all
+  ~30 existing raw `fetch` call sites in `ProjectWorkspace.tsx` migrated
+  to it) sending the session cookie and redirecting to `/login` on 401,
+  `/admin/users` management page
+  (`Manage users`/create/role-change/disable), sign-out button
+- [x] Verified end to end against the real Postgres dev database and a
+  live browser session, and via direct HTTP: login, `/auth/me`, a Power
+  User creating a project and becoming owner, adding a User as a
+  collaborator, the collaborator viewing but being denied (403)
+  archiving, and a plain `POST /projects` being denied for the `user`
+  role. Found and fixed one real bug this way: `auth.py`'s original
+  `_as_utc` only relabeled a naive datetime's tzinfo instead of
+  converting an aware one, which broke `set_cookie`'s `usegmt=True`
+  against Postgres (`timestamptz` columns come back in the connection's
+  session timezone, not literally UTC) — 500'd every real login until
+  fixed
+- [x] Extended role-gated UI beyond "Archive project" to every
+  archive/purge/restore control: file-level "Archive"/"Archive
+  selected", and the "Archived files"/"Archived projects" admin panels
+  (both their fetch and their rendering — previously a `user`-role
+  account triggered a 403'd fetch and saw a misleading "0 archived"
+  empty state instead of the panel being absent). Also found and fixed
+  a related precision bug while doing this: "Archive project" and the
+  per-project Restore/Purge buttons in the archived-projects panel were
+  gated on `role !== "user"` (any Power User), but their actual backend
+  routes (`archive_project`, `restore_archived_project`,
+  `purge_archived_project`) require `require_project_owner` —
+  owner-or-admin specifically, matching what "Reassign owner" already
+  required. A Power User *collaborator* (not owner) would have seen
+  those buttons and gotten a 403. Tightened to
+  `role === "admin" || currentUser.id === project.owner_id` to match.
+  File-level archive/restore/purge only needs `role !== "user"` per
+  `require_project_archive_rights` (any collaborator, not owner-only),
+  confirmed against the actual dependency before gating rather than
+  assumed. Verified end to end logged in as `u-bob` (`user` role): no
+  Reassign owner/Archive project buttons, no archived panels at all.
+- [x] Playwright e2e coverage updated for the auth layer, exactly as
+  scoped: `scripts/e2e_bootstrap.py` now seeds one fixed-credential
+  account per role (`e2e-admin`/`e2e-power-user`/`e2e-user`, idempotent —
+  skips any that already exist, since the e2e SQLite database persists
+  across local runs); `frontend/global-setup.ts` logs in as
+  `e2e-power-user` via the API and saves a `storageState`
+  (`playwright/.auth/power-user.json`), wired into `playwright.config.ts`
+  via `globalSetup` + `use.storageState` so `full-workflow.spec.ts` and
+  `phase9.spec.ts` (real backend) start already authenticated with no
+  per-test login step; `workspace.spec.ts`'s `mockBaseline()` now mocks
+  `GET /auth/me` too (its own fixed mock user, independent of the real
+  login above, keeping that spec's full-mock isolation), and its `PROJECT`
+  fixture got an `owner_id` matching the mock user so the newly
+  role-gated owner-only buttons it exercises (Archive project, etc.)
+  still render. Found and fixed a real, unrelated pre-existing gap along
+  the way: `.e2e-data/e2e.db` is a long-lived SQLite file (intentionally
+  persists across local runs), and `e2e_bootstrap.py` only ever ran
+  `Base.metadata.create_all`, which creates missing tables but never
+  alters existing ones — so the leftover pre-Phase-15 database (no
+  `owner_id` column, no `users` table) 500'd every project creation with
+  `table projects has no column named owner_id` the first time this
+  suite ran since Phase 15 shipped. Not caused by this work, but this was
+  the first time anyone ran the e2e suite since Phase 15 added those
+  columns/tables, so nothing had surfaced it yet. Fixed by clearing
+  `.e2e-data/` (schema is then created fresh and correct); added a
+  comment in `playwright.config.ts` so the next schema change doesn't
+  cause the same confusing 500. Verified by actually running the suite,
+  not just reading the code: all 22 tests pass (3 full-workflow, 2
+  phase9, 17 workspace) against a fresh e2e database
+- [x] A "reassign owner" action from within the UI itself (prompted
+  directly in conversation): a "Reassign owner" button on the active
+  project, visible to its current owner or any admin, opens a modal
+  listing the project's Power User collaborators
+  (`GET /projects/{id}/members`, extended to carry `username`/`role` so
+  the picker doesn't need admin-only `GET /users`) and calls the
+  existing `PATCH /projects/{id}/owner`. Verified end to end as both an
+  admin and as the actual non-admin owner. "Add collaborator" is still
+  addressed by the "Add collaborator" item below
+- [x] An "add collaborator" action from within the UI itself. Needed a
+  small new backend endpoint first: `GET /users/lookup?username=...`,
+  callable by any authenticated user (exact-match only, doesn't
+  enumerate the directory), since the existing `GET /users` is
+  admin-only and a non-admin Power User owner has no other way to
+  resolve a username to a user id before calling
+  `POST /projects/{id}/members`. New test:
+  `test_non_admin_can_look_up_a_username_but_not_list_all_users`. "Add
+  collaborator" button next to "Reassign owner"/"Archive project"
+  (same owner-or-admin gate), a modal taking a username, resolving it
+  via the lookup endpoint, then adding the membership. Verified end to
+  end as an admin adding `u-bob` to a project, confirmed in the database
+- [x] `CLIENT_INSTALL.md`/`DEPLOYMENT.md` already document the
+  `create_sysadmin.py` bootstrap step and `SYSADMIN_INITIAL_PASSWORD`
+  in their setup checklists (CLIENT_INSTALL.md section 5a, DEPLOYMENT.md
+  section 3) — found already complete when reviewed, not new work
+- [x] `USER_GUIDE.md` already has a "Signing in and roles" section
+  covering the three roles, disabled-account/session behavior, and the
+  owner-must-be-a-Power-User rule, plus a "Known limitations" section
+  cross-referencing the still-open items above — found already complete
+  when reviewed, not new work
+
+**Exit criteria:**
+
+- [x] A disabled user cannot log in; an already-open session is
+  rejected on its next request (not instantly)
+- [x] A Power User can create a project (auto-owner), add collaborators
+  to it, and delete/archive it; a non-owner collaborator cannot
+- [x] A `user`-role account can do project working-capability actions
+  (upload, process, calculate, ask questions) but never archive/purge,
+  anywhere
+- [x] The last active Admin cannot be disabled or deleted; a user who
+  still owns a project cannot be disabled or deleted until ownership is
+  reassigned
+- [x] UI role-gating and Playwright coverage are complete (all work
+  items above are done; Playwright verified by an actual run — 22/22
+  passing — not just by reading the code)
+
 ## 5. Testing Strategy
 
 ### Unit tests
@@ -520,7 +715,7 @@ items above:
 3. Add contours, TIN surfaces, alignments, and profile analysis.
 4. Add stormwater, earthwork, structural, and pipe-network calculation modules.
 5. Add embeddings and semantic search for large document collections.
-6. Add multi-user authentication, permissions, billing, and audit history.
+6. Add billing and a full audit-event history. (Multi-user authentication, roles, and per-project ownership/permissions shipped as Phase 15 — see DECISIONS.md ADR-009. Multi-*tenant* SaaS, i.e. one shared instance serving multiple separate firms, is a distinct, larger consideration — see item 10 below.)
 7. Add cloud storage while retaining a local-storage deployment option.
 8. Add Sentry, PostHog, and centralized logging after the core workflow is stable.
 9. Package as an installable desktop app (e.g. Electron) instead of a
@@ -539,6 +734,36 @@ items above:
    calculation engine and tests would need to be re-verified against.
    This item is also what would replace [CLIENT_INSTALL.md](CLIENT_INSTALL.md)'s
    manual, interim client-site install procedure with a single installer.
+10. **Considered, not started: a `Tenant` entity for multi-tenant SaaS**
+    (`Tenant → Users, Clients, Projects`) — raised in conversation as a
+    "study this, don't build it" request after Phase 15 shipped. Full
+    analysis recorded in DECISIONS.md's Proposed Decisions; summary:
+    - This is a genuine strategic fork, not an additive feature. The
+      project has already chosen a tenant-isolation strategy, just at
+      the infrastructure level: CLIENT_INSTALL.md/DEPLOYMENT.md (ADR-002)
+      give each firm its own installation and database, which is
+      *stronger* isolation than any in-app tenant column could provide.
+      A `Tenant` entity means deliberately trading that for a single
+      shared hosted instance — better economics/ops, but now every
+      query in the codebase is a place a cross-tenant leak could happen.
+    - Naming collision to avoid: the existing `Client` model already
+      means "the engineering firm's own customer" (e.g. a city). A SaaS
+      `Tenant` would mean "the firm paying for this software" — a third
+      level above what exists today (`Tenant → Client → Project`).
+    - Bigger and structurally riskier than Phase 15: Phase 15 added a
+      permission *layer* on unchanged data; a `Tenant` entity
+      *partitions the data itself*, requiring every existing query
+      (all ~34 Phase 15 permission call sites, plus everything else) to
+      be re-audited for tenant scoping, where a mistake is a
+      cross-customer data leak rather than a contained permission bug.
+      Would warrant Postgres Row-Level Security as a DB-enforced
+      backstop, a deviation from this codebase's usual app-layer-only
+      validation convention, given the severity class.
+    - Also implies product-shape work beyond the entity itself: billing/
+      plan tiers, a tenant signup/provisioning flow, per-tenant-unique
+      (not globally-unique) usernames or a switch to email identifiers,
+      and a new "platform admin" role tier distinct from today's
+      install-wide `admin`.
 
 ## 9. Nice-to-Have Improvements
 

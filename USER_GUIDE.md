@@ -5,6 +5,33 @@ rather than developing it. For setup and running instructions, see
 [README.md](README.md) (development) or [DEPLOYMENT.md](DEPLOYMENT.md)
 (a standing local deployment).
 
+## Signing in and roles
+
+You need an account to use the application — there's no anonymous access.
+An administrator creates your account (see DEPLOYMENT.md/CLIENT_INSTALL.md
+for the first `sysadmin` account); there's no self-service sign-up.
+
+Three roles, in increasing order of access:
+
+- **User** — full working access (upload, process, calculate, summarize,
+  ask questions) on the specific projects you're associated with, but
+  never archive or purge anything, anywhere.
+- **Power User** — everything a User can do, on projects you own or are
+  a member of, plus archive/purge rights there. Creating a new project
+  automatically makes you its owner. As owner, you can add or remove
+  collaborators and delete/archive the project itself — a Power User
+  who's just a collaborator (not the owner) can do everything except
+  those two things.
+- **Admin** — everything, on every project, plus user management
+  (creating accounts, changing roles, disabling/enabling, reassigning a
+  project's owner when needed).
+
+A disabled account can't log in; if it has a session already open, that
+session stops working on its next request rather than instantly. A
+project's owner must always be a Power User — if that account is
+disabled or deleted, an admin has to reassign ownership to another
+Power User first.
+
 ## What it does
 
 1. Create a project.
@@ -90,8 +117,9 @@ use:
 
 - No OCR yet — a scanned/image-only PDF page or a TIFF produces a
   warning rather than extracted text/geometry.
-- No authentication — this is a single-user, local-only application
-  (DECISIONS.md ADR-005). Do not expose it beyond local use.
+- There's still no "add collaborator" UI — a Power User owner can
+  reassign ownership to an *existing* collaborator, but can't add a new
+  one without calling the API directly (see PLAN.md Phase 15).
 - Calculations assume a projected (not geographic lat/lon) coordinate
   system; using a geographic CRS is not yet validated or rejected.
 - Curved DXF/LandXML alignments (arcs, spirals) are not extracted.

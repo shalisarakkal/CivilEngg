@@ -2,12 +2,14 @@ from collections.abc import Generator
 from pathlib import Path
 
 import ezdxf
+from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from civil_engineering.auth import get_current_user
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 
@@ -44,6 +46,7 @@ def test_directional_question_resolves_the_north_boundary_via_the_api(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         dxf_path = tmp_path / "parcel.dxf"
@@ -117,6 +120,7 @@ def test_directional_question_picks_the_correct_polygon_by_true_centroid(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]

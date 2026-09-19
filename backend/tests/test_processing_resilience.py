@@ -2,6 +2,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from civil_engineering import storage
+from civil_engineering.auth import get_current_user
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 from civil_engineering.models import ExtractedDocument, ProcessingJob, SourceFile
@@ -33,6 +35,7 @@ def _client(tmp_path: Path, monkeypatch: MonkeyPatch) -> TestClient:
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     return TestClient(app)
 
 
@@ -216,6 +219,7 @@ def _client_with_per_thread_connections(tmp_path: Path, monkeypatch: MonkeyPatch
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     return TestClient(app)
 
 
@@ -256,7 +260,9 @@ def test_concurrent_revision_accepts_get_unique_revision_numbers(
         for index in range(4):
             uploaded = client.post(
                 f"/projects/{project['id']}/files",
-                files={"file": (f"survey-{index}.txt", f"elevation={index}".encode(), "text/plain")},
+                files={
+                    "file": (f"survey-{index}.txt", f"elevation={index}".encode(), "text/plain")
+                },
             )
             assert uploaded.status_code == 201
             file_id = uploaded.json()["id"]

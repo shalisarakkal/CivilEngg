@@ -17,26 +17,40 @@ This document describes the initial logical API. Exact schemas and authenticatio
 
 Returns application and dependency status.
 
+## Authentication and Users
+
+- `POST /auth/login` - log in, sets an httpOnly session cookie
+- `POST /auth/logout` - revoke the current session
+- `GET /auth/me` - the logged-in user
+- `POST /users` / `GET /users` / `PATCH /users/{user_id}` / `DELETE /users/{user_id}` - user management (admin only)
+
+Every route below requires a logged-in session, and most are further
+scoped to a role and/or project ownership/membership — see
+DECISIONS.md ADR-009 and PLAN.md Phase 15 for the full matrix. A
+caller who isn't a member of a given project gets `404` (not `403`)
+so a project's existence isn't leaked to someone unauthorized to see it.
+
 ## Clients
 
-- `POST /clients` - create a client
+- `POST /clients` - create a client (admin/power_user)
 - `GET /clients` - list clients
 - `GET /clients/{client_id}` - retrieve a client
-- `PATCH /clients/{client_id}` - update a client
-- `POST /clients/{client_id}/archive` - archive a client
-
-Client and project routes are available without authentication in the current local single-user MVP.
+- `PATCH /clients/{client_id}` - update a client (admin/power_user)
+- `POST /clients/{client_id}/archive` - archive a client (admin/power_user)
 
 ## Projects
 
-- `POST /projects` - create a project
-- `GET /projects` - list projects
+- `POST /projects` - create a project (admin/power_user; a power_user caller auto-becomes owner)
+- `GET /projects` - list projects (admin sees all; everyone else sees only projects they own or are a member of)
 - `GET /projects/{project_id}` - retrieve a project
 - `PATCH /projects/{project_id}` - update a project
-- `POST /projects/{project_id}/archive` - archive a project
-- `GET /admin/projects/archived` - list archived projects
-- `POST /admin/projects/{project_id}/restore` - restore an archived project
-- `DELETE /admin/projects/{project_id}` - permanently purge an archived project (deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, and Q&A history, and its on-disk storage directory)
+- `POST /projects/{project_id}/archive` - archive a project (owner/admin only)
+- `GET /admin/projects/archived` - list archived projects (not `user` role)
+- `POST /admin/projects/{project_id}/restore` - restore an archived project (owner/admin only)
+- `DELETE /admin/projects/{project_id}` - permanently purge an archived project (owner/admin only; deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, and Q&A history, and its on-disk storage directory)
+- `GET /projects/{project_id}/members` - list a project's collaborators
+- `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only)
+- `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user)
 
 ## Files and Processing
 

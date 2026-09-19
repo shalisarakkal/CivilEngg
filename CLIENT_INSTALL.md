@@ -205,6 +205,21 @@ Verify it landed on the expected head (see VERIFY.md section 3 for the
 current expected revision — check this project's own `backend/migrations`
 for the latest if it's changed since).
 
+### 5a. Create the first admin account
+
+```powershell
+cd backend
+$env:SYSADMIN_INITIAL_PASSWORD = "<a real password, not the example below>"
+uv run python scripts/create_sysadmin.py
+Remove-Item Env:SYSADMIN_INITIAL_PASSWORD
+cd ..
+```
+
+Creates the `sysadmin` account (role: Admin) used to log in and create
+the client's real user accounts. `SYSADMIN_INITIAL_PASSWORD` is a
+one-shot shell variable, never written to `.env` or any file — unset it
+immediately after, as shown above.
+
 ### 6. Build and start
 
 ```powershell

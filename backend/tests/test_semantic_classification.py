@@ -2,12 +2,14 @@ from collections.abc import Generator
 from pathlib import Path
 
 import ezdxf
+from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from civil_engineering.auth import get_current_user
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 
@@ -44,6 +46,7 @@ def test_dxf_layers_classify_entities_by_semantic_type(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         dxf_path = tmp_path / "site.dxf"
@@ -98,6 +101,7 @@ def test_csv_type_and_zoning_columns_are_classified(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
     try:
         project = client.post("/projects", json={"name": "Zoning Tags"}).json()

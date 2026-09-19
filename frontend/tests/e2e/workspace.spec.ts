@@ -2,9 +2,22 @@ import { test, expect, Page, Route } from "@playwright/test";
 
 const API = "http://localhost:8000";
 
+const MOCK_CURRENT_USER = {
+  id: "99999999-9999-9999-9999-999999999999",
+  username: "mock-power-user",
+  role: "power_user",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  disabled_at: null,
+};
+
 const PROJECT = {
   id: "11111111-1111-1111-1111-111111111111",
   client_id: null,
+  // Owned by MOCK_CURRENT_USER: several tests exercise owner-only actions
+  // (Archive project, Reassign owner, Add collaborator), which are now
+  // gated client-side on currentUser.id === project.owner_id.
+  owner_id: MOCK_CURRENT_USER.id,
   name: "Oak Street Site",
   description: null,
   default_unit_system: "imperial",
@@ -20,6 +33,13 @@ async function json(route: Route, body: unknown, status = 200) {
 
 /** Wires up the baseline set of API routes every workspace load depends on. */
 async function mockBaseline(page: Page, projects: { id: string }[] = []) {
+  // AuthProvider calls this before rendering anything else -- without a
+  // mock it would fall through to the real backend (a real webServer is
+  // running per playwright.config.ts, but with no session cookie this
+  // page's own fetch would 401 and redirect to /login before any of the
+  // routes below ever mattered), so every other mock in this file only
+  // matters once this one exists.
+  await page.route(`${API}/auth/me`, (route) => json(route, MOCK_CURRENT_USER));
   await page.route(`${API}/projects`, async (route) => {
     if (route.request().method() === "GET") return json(route, projects);
     return route.continue();

@@ -1,12 +1,14 @@
 from collections.abc import Generator
 from pathlib import Path
 
+from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from civil_engineering.auth import get_current_user
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
 
@@ -32,6 +34,7 @@ def test_project_file_workflow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
 
     try:
@@ -203,6 +206,7 @@ def test_project_archive_restore_and_permanent_purge(
 
     get_settings.cache_clear()
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
 
     try:
@@ -254,9 +258,7 @@ def test_project_archive_restore_and_permanent_purge(
         get_settings.cache_clear()
 
 
-def test_archive_auto_purge_retention_and_history(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_archive_auto_purge_retention_and_history(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -276,6 +278,7 @@ def test_archive_auto_purge_retention_and_history(
     from civil_engineering.config import get_settings
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_user_factory(sessions)
     client = TestClient(app)
 
     try:

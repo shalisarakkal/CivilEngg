@@ -35,6 +35,11 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text)
     default_unit_system: Mapped[str] = mapped_column(String(32), nullable=False, default="imperial")
     coordinate_reference_system: Mapped[str | None] = mapped_column(String(100))
+    # Nullable at the DB level even though every project should have an owner:
+    # existing rows predate the users table, and no user exists yet at
+    # migration time to backfill onto. Enforced as required for new projects
+    # at the schema/route layer instead (see create_project in routes.py).
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -42,6 +47,7 @@ class Project(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     client: Mapped[Client | None] = relationship(back_populates="projects")
+    owner: Mapped["User | None"] = relationship(foreign_keys=[owner_id])
     source_files: Mapped[list["SourceFile"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
@@ -52,6 +58,9 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan"
     )
     calculations: Mapped[list["CalculationResult"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    memberships: Mapped[list["ProjectMembership"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -141,7 +150,9 @@ class ExtractedDocument(Base):
 class ProjectRevision(Base):
     __tablename__ = "project_revisions"
     __table_args__ = (
-        UniqueConstraint("project_id", "revision_number", name="uq_project_revisions_project_number"),
+        UniqueConstraint(
+            "project_id", "revision_number", name="uq_project_revisions_project_number"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -254,3 +265,66 @@ class PurgeHistoryEntry(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     purge_reason: Mapped[str] = mapped_column(String(32), nullable=False)
     purged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # The project's owner_id at the moment this was purged (project or file),
+    # captured because that ownership row disappears along with the project
+    # itself -- not literally "who clicked purge," since an automatic
+    # retention sweep isn't attributable to any specific action. No FK,
+    # deliberately, for the same reason this table has none to projects/
+    # source_files: it must outlive the user account too if that's deleted.
+    purged_by_user_id: Mapped[str | None] = mapped_column(String(36))
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # admin | power_user | user -- validated in schemas.py, not a DB enum,
+    # matching this codebase's existing string-status-field convention (see
+    # SiteModelEntity.validation_status, CalculationResult.calculation_type).
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    # Presence signals disabled, absence signals active -- same idiom as
+    # Project.archived_at/SourceFile.deleted_at rather than a new bool flag.
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Session(Base):
+    """A server-side session; its id is also the value stored in the cookie."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship()
+
+
+class ProjectMembership(Base):
+    """Associates a user with a project beyond the project's own owner.
+
+    Ownership itself lives on Project.owner_id (a single source of truth);
+    this table is purely for additional collaborators, Power User or User.
+    """
+
+    __tablename__ = "project_memberships"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_project_memberships_project_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="memberships")
+    user: Mapped[User] = relationship()

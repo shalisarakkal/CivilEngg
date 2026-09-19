@@ -31,6 +31,7 @@ coverage/
 playwright-report/
 test-results/
 frontend/.e2e-data/
+frontend/playwright/.auth/
 
 # IDE and operating-system files
 .vscode/
@@ -40,3 +41,4 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
