@@ -52,6 +52,8 @@ so a project's existence isn't leaked to someone unauthorized to see it.
 - `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only)
 - `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user)
 
+A project's optional `coordinate_reference_system` must be a projected CRS. `POST`/`PATCH` return `422` for a geographic (lat/lon degree) one, such as `EPSG:4326`, because every measurement the app performs is planar. A CRS that pyproj does not recognize, or none at all, is accepted and the project's coordinates are assumed to be planar already.
+
 ## Files and Processing
 
 - `POST /projects/{project_id}/files` - upload a source file
@@ -88,6 +90,8 @@ There is no route for a bare "active revision" or unscoped entity list; entities
 - `GET /projects/{project_id}/calculations/{calculation_id}` - retrieve a calculation
 
 `POST` accepts a calculation type, input entity IDs or explicit points, units, and optional revision ID. Returns the formula, normalized inputs, result, unit, assumptions, and source references.
+
+`distance`, `area`, and `perimeter` return `400` if the project's `coordinate_reference_system` is geographic — those formulas are Euclidean and would report degrees under a linear unit label. `slope` and `elevation` are unaffected, since they work on supplied values rather than coordinate positions. The same rule applies to questions: a question needing a planar measurement returns the standard insufficient-data answer naming the CRS, and a site summary of such a project carries a matching attention flag.
 
 Area and perimeter also accept native Circle JSON, for example `{"type":"Circle","center":[100,200],"radius":25}`. The radius uses `coordinate_unit`; area uses `pi * radius^2` and perimeter uses `2 * pi * radius`.
 

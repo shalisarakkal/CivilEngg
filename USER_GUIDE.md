@@ -120,7 +120,10 @@ use:
 - There's still no "add collaborator" UI — a Power User owner can
   reassign ownership to an *existing* collaborator, but can't add a new
   one without calling the API directly (see PLAN.md Phase 15).
-- Calculations assume a projected (not geographic lat/lon) coordinate
-  system; using a geographic CRS is not yet validated or rejected.
+- A project's coordinate reference system must be projected, not
+  geographic (lat/lon degrees): distances, areas, and perimeters are
+  measured on a plane. A geographic CRS is now refused when you set it,
+  and measurements are refused outright for any project that already
+  has one, rather than returning a number in degrees labelled as feet.
 - Curved DXF/LandXML alignments (arcs, spirals) are not extracted.
 - Label-to-geometry linking only covers DXF-sourced labels.

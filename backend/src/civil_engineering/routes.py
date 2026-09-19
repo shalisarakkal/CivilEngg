@@ -87,7 +87,13 @@ from civil_engineering.schemas import (
     UserResponse,
     UserUpdate,
 )
-from civil_engineering.site_model import SiteModelError, normalize_geometry
+from civil_engineering.site_model import (
+    SiteModelError,
+    crs_linear_unit_meters,
+    ensure_projected_crs,
+    is_geographic_crs,
+    normalize_geometry,
+)
 from civil_engineering.storage import (
     FileValidationError,
     archive_file,
@@ -516,6 +522,21 @@ def archive_client(
     return client
 
 
+def _require_projected_crs(crs: str | None) -> None:
+    """Reject a geographic CRS before it can be stored on a project.
+
+    Distances, areas, and perimeters are all planar (see calculations.py), so a
+    lat/lon CRS would silently produce degree-based numbers labelled as feet or
+    metres. Blocking it here keeps that state from ever being created; the
+    calculation and question endpoints repeat the check for projects stored
+    before this validation existed.
+    """
+    try:
+        ensure_projected_crs(crs)
+    except SiteModelError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(
     payload: ProjectCreate,
@@ -529,6 +550,7 @@ def create_project(
         )
     if payload.client_id is not None:
         get_client_or_404(payload.client_id, database)
+    _require_projected_crs(payload.coordinate_reference_system)
     data = payload.model_dump()
     if current_user.role == ROLE_POWER_USER:
         data["owner_id"] = current_user.id
@@ -572,6 +594,8 @@ def update_project(
     values = payload.model_dump(exclude_unset=True)
     if "client_id" in values and values["client_id"] is not None:
         get_client_or_404(values["client_id"], database)
+    if "coordinate_reference_system" in values:
+        _require_projected_crs(values["coordinate_reference_system"])
     for key, value in values.items():
         setattr(project, key, value)
     database.commit()
@@ -1174,7 +1198,7 @@ def create_site_model_revision(
         database.add(entity)
         created_entities.append(entity)
     database.flush()
-    _link_labels_to_nearby_geometry(created_entities)
+    _link_labels_to_nearby_geometry(created_entities, project)
     if text_lines:
         database.add(
             SiteModelEntity(
@@ -1256,12 +1280,35 @@ def _classify_entity(value: Any, source: dict[str, Any] | None) -> dict[str, Any
     return properties
 
 
-# Fixed coordinate-unit cutoff for label-to-geometry proximity linking, matching the
-# unit-agnostic style of TIGHT_SETBACK_UNITS in ai_service.py (see RISK_REGISTER.md).
-LABEL_LINK_MAX_DISTANCE = 10.0
+# How far a plan label may sit from the feature it annotates, as a real-world
+# distance rather than a bare coordinate count: ten feet, the working figure this
+# linking has always used, expressed in metres so it can be converted into whatever
+# unit a given project's coordinates are in.
+LABEL_LINK_MAX_DISTANCE_METERS = 10 * 0.3048
+
+# Fallback size of one coordinate unit when the project declares no usable CRS to
+# read it from. Mirrors the unit systems accepted by ProjectCreate.
+METERS_PER_UNIT_SYSTEM = {"imperial": 0.3048, "metric": 1.0}
+DEFAULT_METERS_PER_UNIT = METERS_PER_UNIT_SYSTEM["imperial"]
 
 
-def _link_labels_to_nearby_geometry(entities: list[SiteModelEntity]) -> None:
+def _label_link_max_distance(project: Project) -> float:
+    """The label-linking cutoff in the project's own coordinate units.
+
+    Taken from the project's CRS when it has one, since that states exactly how
+    long a coordinate unit is; otherwise from its declared unit system. A
+    foot-based project keeps the ten-unit cutoff it had before this was made
+    unit-aware, while a metre-based project gets 3.048 units instead of ten.
+    """
+    meters_per_unit = crs_linear_unit_meters(project.coordinate_reference_system)
+    if meters_per_unit is None:
+        meters_per_unit = METERS_PER_UNIT_SYSTEM.get(
+            (project.default_unit_system or "").lower(), DEFAULT_METERS_PER_UNIT
+        )
+    return LABEL_LINK_MAX_DISTANCE_METERS / meters_per_unit
+
+
+def _link_labels_to_nearby_geometry(entities: list[SiteModelEntity], project: Project) -> None:
     geometries = [
         (entity, shape(entity.geometry))
         for entity in entities
@@ -1269,6 +1316,7 @@ def _link_labels_to_nearby_geometry(entities: list[SiteModelEntity]) -> None:
     ]
     if not geometries:
         return
+    max_distance = _label_link_max_distance(project)
     for entity in entities:
         if entity.entity_type != "text":
             continue
@@ -1280,7 +1328,7 @@ def _link_labels_to_nearby_geometry(entities: list[SiteModelEntity]) -> None:
             ((candidate, label_point.distance(geometry)) for candidate, geometry in geometries),
             key=lambda pair: pair[1],
         )
-        if nearest_distance > LABEL_LINK_MAX_DISTANCE:
+        if nearest_distance > max_distance:
             continue
         entity.properties = {
             **(entity.properties or {}),
@@ -1457,6 +1505,12 @@ def compare_site_model_revisions(
     return {"added": added, "removed": removed, "changed": changed}
 
 
+# Calculation types whose formulas are Euclidean and therefore need projected
+# coordinates. Slope and elevation statistics work on supplied numbers rather than
+# on coordinate positions, so they are unaffected by a geographic CRS.
+PLANAR_CALCULATION_TYPES = frozenset({"distance", "area", "perimeter"})
+
+
 @router.post(
     "/projects/{project_id}/calculations",
     response_model=CalculationResponse,
@@ -1477,6 +1531,18 @@ def create_calculation(
         )
         if revision is None:
             raise HTTPException(status_code=404, detail="Site-model revision not found")
+    if payload.calculation_type in PLANAR_CALCULATION_TYPES and is_geographic_crs(
+        project.coordinate_reference_system
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This project's coordinate reference system "
+                f"({project.coordinate_reference_system}) is geographic (lat/lon degrees); "
+                f"{payload.calculation_type} is measured on a plane and would be meaningless. "
+                "Set a projected CRS for the project first."
+            ),
+        )
     try:
         if payload.calculation_type == "distance":
             result = calculate_distance(
@@ -1633,7 +1699,7 @@ def create_summary(
     project_id: str,
     revision_ids: list[str] | None = None,
     database: Session = Depends(get_db),
-    _project: Project = Depends(require_project_member),
+    project: Project = Depends(require_project_member),
 ) -> ProjectSummary:
     resolved_ids = _resolve_revision_ids(project_id, revision_ids, database)
     entities = []
@@ -1648,7 +1714,13 @@ def create_summary(
             entity.validation_status for entity in entities if entity.validation_status != "valid"
         ]
     entities_payload = [_entity_payload(entity) for entity in entities]
-    content = MockAIProvider().summarize({"entities": entities_payload, "warnings": warnings})
+    content = MockAIProvider().summarize(
+        {
+            "entities": entities_payload,
+            "warnings": warnings,
+            "coordinate_reference_system": project.coordinate_reference_system,
+        }
+    )
     summary = ProjectSummary(
         project_id=project_id, revision_ids=resolved_ids or None, content=content
     )
@@ -1678,7 +1750,7 @@ def ask_question(
     project_id: str,
     payload: QuestionRequest,
     database: Session = Depends(get_db),
-    _project: Project = Depends(require_project_member),
+    project: Project = Depends(require_project_member),
 ) -> QuestionAnswer:
     intent = route_question(payload.question)
     resolved_ids = _resolve_revision_ids(project_id, payload.revision_ids, database)
@@ -1691,7 +1763,12 @@ def ask_question(
         )
         entities_payload = [_entity_payload(entity) for entity in entities]
     answer = MockAIProvider().answer(
-        payload.question, {"entities": entities_payload, "intent": intent}
+        payload.question,
+        {
+            "entities": entities_payload,
+            "intent": intent,
+            "coordinate_reference_system": project.coordinate_reference_system,
+        },
     )
     question = QuestionAnswer(
         project_id=project_id,

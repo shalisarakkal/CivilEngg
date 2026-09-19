@@ -176,4 +176,4 @@ SourceFile 1 -- 1 SourceFile                  (superseded_by_id, optional: the f
 
 ## Open Modeling Questions
 
-- Supported coordinate reference systems, and whether a geographic (lat/lon) CRS should be rejected at calculation time (see RISK_REGISTER.md)
+- Which projected coordinate reference systems to support explicitly. Whether a geographic (lat/lon) CRS should be rejected is settled: it is (see RISK_REGISTER.md) — a project cannot adopt one, and planar measurements are refused for any project that already carries one.

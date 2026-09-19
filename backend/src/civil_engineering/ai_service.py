@@ -11,6 +11,7 @@ from civil_engineering.calculations import (
     calculate_perimeter,
     calculate_slope,
 )
+from civil_engineering.site_model import is_geographic_crs
 
 DRAINAGE_KEYWORDS = ("storm", "drain", "culvert", "swale", "detention", "retention")
 UTILITY_KEYWORDS = ("water", "sewer", "gas", "electric", "utility", "manhole", "hydrant")
@@ -40,6 +41,17 @@ ROLE_TO_SEMANTIC_TYPE = {
     "road": "driveway_road",
     "curb cut": "curb_cut",
 }
+
+# Question intents answered by measuring positions on a plane. They need a projected
+# CRS to mean anything (see routes.py's PLANAR_CALCULATION_TYPES); "elevation" is left
+# out because it only summarizes z values, and "summary" is degraded with a flag rather
+# than refused, since most of what it reports is not a measurement.
+PLANAR_INTENTS = frozenset({"directional_distance", "distance", "slope", "area", "perimeter"})
+
+GEOGRAPHIC_CRS_FLAG = (
+    "Project coordinates are geographic (lat/lon degrees); distances, slopes, and "
+    "clearances derived from them are not reliable measurements."
+)
 
 # Heuristic thresholds for attention flags, not engineering code requirements.
 STEEP_SLOPE_PERCENT = 15.0
@@ -569,7 +581,9 @@ class MockAIProvider:
 
     def summarize(self, context: dict[str, Any]) -> dict[str, Any]:
         entities = context.get("entities", [])
-        warnings = context.get("warnings", [])
+        warnings = list(context.get("warnings", []))
+        if is_geographic_crs(context.get("coordinate_reference_system")):
+            warnings.append(GEOGRAPHIC_CRS_FLAG)
         return {
             "summary": f"Site model contains {len(entities)} extracted entities.",
             "grading": _grading_summary(entities),
@@ -582,6 +596,13 @@ class MockAIProvider:
     def answer(self, question: str, context: dict[str, Any]) -> dict[str, Any]:
         entities = context.get("entities", [])
         intent = context.get("intent") or route_question(question)
+        crs = context.get("coordinate_reference_system")
+        if intent in PLANAR_INTENTS and is_geographic_crs(crs):
+            return _insufficient(
+                f"This project's coordinate reference system ({crs}) is geographic "
+                "(lat/lon degrees); this question needs a planar measurement, which "
+                "requires a projected CRS."
+            )
         if intent == "directional_distance":
             return _answer_directional(question, entities)
         if intent == "distance":

@@ -10,6 +10,53 @@ class SiteModelError(ValueError):
     pass
 
 
+def _parsed_crs(crs: str | None) -> CRS | None:
+    if not crs:
+        return None
+    try:
+        return CRS.from_user_input(crs)
+    except Exception:
+        return None
+
+
+def is_geographic_crs(crs: str | None) -> bool:
+    """True when `crs` measures position in angular units (lat/lon degrees).
+
+    Every measurement in calculations.py is planar (Euclidean, via Shapely), so a
+    geographic CRS would produce numbers in degrees while labelling them with a
+    linear unit. An unrecognized or absent CRS is not reported as geographic: the
+    project is then simply assumed to use planar coordinates, as it always has.
+    """
+    parsed = _parsed_crs(crs)
+    return bool(parsed is not None and parsed.is_geographic)
+
+
+def ensure_projected_crs(crs: str | None) -> None:
+    if is_geographic_crs(crs):
+        raise SiteModelError(
+            f"{crs} is a geographic (lat/lon degree) coordinate reference system; "
+            "distance, area, and perimeter are measured on a plane, so the project "
+            "must use a projected CRS"
+        )
+
+
+def crs_linear_unit_meters(crs: str | None) -> float | None:
+    """Metres in one horizontal coordinate unit of `crs`.
+
+    None when the CRS is absent, unrecognized, or geographic — in those cases the
+    size of a coordinate unit is unknown (or not a length at all) and the caller
+    has to fall back to the project's declared unit system.
+    """
+    parsed = _parsed_crs(crs)
+    if parsed is None or parsed.is_geographic:
+        return None
+    axis = parsed.axis_info[0] if parsed.axis_info else None
+    factor = getattr(axis, "unit_conversion_factor", None)
+    if not isinstance(factor, (int, float)) or factor <= 0:
+        return None
+    return float(factor)
+
+
 def normalize_geometry(
     value: dict[str, Any], source_crs: str | None = None, target_crs: str | None = None
 ) -> dict[str, Any]:

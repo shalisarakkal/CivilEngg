@@ -2,6 +2,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import ezdxf
+import pytest
 from auth_helpers import override_user_factory
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
@@ -182,3 +183,26 @@ def test_closed_lwpolyline_becomes_a_polygon_not_a_linestring(
     finally:
         app.dependency_overrides.clear()
         get_settings.cache_clear()
+
+
+def test_label_link_cutoff_is_expressed_in_the_project_s_own_coordinate_units() -> None:
+    # The ten-unit cutoff used to mean "ten of whatever the coordinates count in",
+    # so the same constant was ten feet in one project and ten metres in another
+    # (see RISK_REGISTER.md). It is now a fixed real-world distance converted into
+    # each project's units, read from the CRS when there is one.
+    from civil_engineering.models import Project
+    from civil_engineering.routes import _label_link_max_distance
+
+    feet = Project(name="Foot project", coordinate_reference_system="EPSG:2263")
+    meters = Project(name="Metre project", coordinate_reference_system="EPSG:32618")
+    assert _label_link_max_distance(feet) == pytest.approx(10.0, abs=1e-3)
+    assert _label_link_max_distance(meters) == pytest.approx(3.048)
+
+    # With no CRS to read, the project's declared unit system decides; imperial is
+    # the default, and keeps the ten-unit cutoff this linking has always used.
+    assert _label_link_max_distance(
+        Project(name="No CRS", default_unit_system="imperial")
+    ) == pytest.approx(10.0)
+    assert _label_link_max_distance(
+        Project(name="No CRS", default_unit_system="metric")
+    ) == pytest.approx(3.048)
