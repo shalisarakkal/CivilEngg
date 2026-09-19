@@ -450,7 +450,7 @@ Phase 6 lifecycle additions:
 
 **Work items (not yet broken down), roughly in increasing effort:**
 
-- [ ] Fix the area/perimeter role-filtering gap: reuse `ROLE_TO_SEMANTIC_TYPE` (already built for directional questions) in `_answer_area`/`_answer_perimeter` so "property"/"parcel" phrasing filters to `parcel_boundary` and "building"/"footprint" phrasing filters to `building_footprint`, instead of matching every polygon in the model
+- [x] Fixed the area/perimeter role-filtering gap (2026-09-19, see RISK_REGISTER.md): extracted `_question_role()` from `_parse_directional_question`'s existing `ROLE_TO_SEMANTIC_TYPE` lookup and reused it in `_answer_area`/`_answer_perimeter` to narrow candidates before the ambiguity check when the question names a role ("parcel"/"property line" -> `parcel_boundary`, "building"/"footprint" -> `building_footprint`, etc.); a role-less question still considers every candidate, unchanged. Regression test: `test_area_and_perimeter_questions_pick_the_named_role_instead_of_colliding`
 - [ ] Add semantic-type keywords for currently-unclassified features referenced in `TestQuestions` (utility easement, parking space/lot, tree, sidewalk, stormwater detention basin), mirroring the existing `DRIVEWAY_TYPE_KEYWORDS`/`CURB_CUT_TYPE_KEYWORDS` pattern in `routes.py`
 - [ ] Wire the existing drainage/utility keyword rollups (`_keyword_summary` in `ai_service.py`) into `ask_question`, not just the separate project-summary endpoint, so questions like "Is a utility easement shown?" get more than the generic text fallback
 - [ ] Add a "count" intent (parking spaces, trees) once those entities carry semantic types

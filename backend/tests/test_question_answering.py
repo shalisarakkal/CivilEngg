@@ -319,3 +319,75 @@ def test_area_and_perimeter_questions_are_routed_and_answered(
         from civil_engineering.config import get_settings
 
         get_settings.cache_clear()
+
+
+def test_area_and_perimeter_questions_pick_the_named_role_instead_of_colliding(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test (PLAN.md Phase 14 / RISK_REGISTER.md): with both a
+    # parcel boundary and a building footprint polygon in the model,
+    # _answer_area/_answer_perimeter used to match every polygon regardless
+    # of what the question named, so "What is the property area?" and "What
+    # is the building footprint area?" collided on the same candidate pool
+    # and both returned "ambiguous" instead of picking the one the question
+    # actually asked about.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]
+        modelspace = drawing.modelspace()
+        # Parcel: 100x100 -> area 10000, perimeter 400.
+        modelspace.add_lwpolyline(
+            [(0, 0), (100, 0), (100, 100), (0, 100)],
+            close=True,
+            dxfattribs={"layer": "PROPERTY LINE"},
+        )
+        # Building footprint: 10x10 -> area 100, perimeter 40.
+        modelspace.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 10), (0, 10)],
+            close=True,
+            dxfattribs={"layer": "BUILDING FOOTPRINT"},
+        )
+        dxf_path = tmp_path / "parcel_and_building.dxf"
+        drawing.saveas(dxf_path)
+
+        project = client.post("/projects", json={"name": "Role Filtering Site"}).json()
+        uploaded = client.post(
+            f"/projects/{project['id']}/files",
+            files={"file": ("parcel_and_building.dxf", dxf_path.read_bytes(), "application/dxf")},
+        ).json()
+        processed = client.post(f"/projects/{project['id']}/files/{uploaded['id']}/process").json()
+        assert processed["status"] == "completed"
+        revision = client.post(
+            f"/projects/{project['id']}/site-model/revisions/from-extraction/{uploaded['id']}"
+        ).json()
+
+        def ask(question: str) -> dict:
+            return client.post(
+                f"/projects/{project['id']}/questions",
+                json={"question": question, "revision_ids": [revision["id"]]},
+            ).json()
+
+        property_area = ask("What is the parcel area?")
+        assert property_area["answer"]["result"] == 10000.0
+        assert property_area["answer"]["confidence"] == 0.9
+
+        building_area = ask("What is the building footprint area?")
+        assert building_area["answer"]["result"] == 100.0
+        assert building_area["answer"]["confidence"] == 0.9
+
+        property_perimeter = ask("What is the parcel perimeter?")
+        assert property_perimeter["answer"]["result"] == 400.0
+
+        building_perimeter = ask("What is the building footprint perimeter?")
+        assert building_perimeter["answer"]["result"] == 40.0
+
+        # No role named in the question -- both polygons still match, so this
+        # stays ambiguous rather than silently guessing one.
+        generic_area = ask("What is the area?")
+        assert generic_area["answer"]["method"] == "clarification needed"
+        assert len(generic_area["answer"]["source_references"]) == 2
+    finally:
+        app.dependency_overrides.clear()
+        from civil_engineering.config import get_settings
+
+        get_settings.cache_clear()

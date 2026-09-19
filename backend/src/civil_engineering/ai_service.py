@@ -102,15 +102,23 @@ def route_question(question: str) -> str:
     return "summary"
 
 
+def _question_role(question: str) -> str | None:
+    """The semantic_type a role phrase in the question refers to (see
+    ROLE_TO_SEMANTIC_TYPE), or None if the question doesn't name one."""
+    normalized = question.lower()
+    role = next((phrase for phrase in ROLE_TO_SEMANTIC_TYPE if phrase in normalized), None)
+    return ROLE_TO_SEMANTIC_TYPE[role] if role is not None else None
+
+
 def _parse_directional_question(question: str) -> tuple[str, str] | None:
     normalized = question.lower()
     direction = next((word for word in DIRECTION_AXES if word in normalized), None)
     if direction is None:
         return None
-    role = next((phrase for phrase in ROLE_TO_SEMANTIC_TYPE if phrase in normalized), None)
-    if role is None:
+    semantic_type = _question_role(question)
+    if semantic_type is None:
         return None
-    return direction, ROLE_TO_SEMANTIC_TYPE[role]
+    return direction, semantic_type
 
 
 def _point_z(geometry: dict[str, Any] | None) -> float | None:
@@ -336,12 +344,27 @@ def _geometry_type_candidates(
     ]
 
 
-def _answer_area(entities: list[dict[str, Any]]) -> dict[str, Any]:
+def _answer_area(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
     # Area is a property of one closed shape, not a relationship between two
     # geometries -- unlike _answer_distance, this needs exactly one candidate.
     candidates = _geometry_type_candidates(entities, {"Polygon", "MultiPolygon", "Circle"})
+    role = _question_role(question)
+    if role is not None:
+        # Narrow to the role the question actually named (e.g. "property" ->
+        # parcel_boundary) so a model with both a parcel boundary and a
+        # building footprint doesn't collide on the same candidate pool and
+        # report "ambiguous" when the question was specific about which one
+        # it meant (PLAN.md Phase 14).
+        candidates = [
+            entity
+            for entity in candidates
+            if (entity.get("properties") or {}).get("semantic_type") == role
+        ]
     if not candidates:
-        return _insufficient("No mapped polygon geometry is available to measure an area.")
+        role_label = f"{role.replace('_', ' ')} " if role is not None else ""
+        return _insufficient(
+            f"No mapped {role_label}polygon geometry is available to measure an area."
+        )
     if len(candidates) > 1:
         return _ambiguous(candidates, "Multiple mapped polygons could define this area.")
     entity = candidates[0]
@@ -361,16 +384,27 @@ def _answer_area(entities: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _answer_perimeter(entities: list[dict[str, Any]]) -> dict[str, Any]:
+def _answer_perimeter(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
     # Perimeter sums every segment of one shape (open or closed), not a
     # relationship between two geometries -- unlike _answer_distance, this
     # needs exactly one candidate.
     candidates = _geometry_type_candidates(
         entities, {"LineString", "MultiLineString", "Polygon", "MultiPolygon", "Circle"}
     )
+    role = _question_role(question)
+    if role is not None:
+        # See the matching comment in _answer_area: narrow to the role the
+        # question named instead of colliding on every candidate (PLAN.md
+        # Phase 14).
+        candidates = [
+            entity
+            for entity in candidates
+            if (entity.get("properties") or {}).get("semantic_type") == role
+        ]
     if not candidates:
+        role_label = f"{role.replace('_', ' ')} " if role is not None else ""
         return _insufficient(
-            "No mapped line or polygon geometry is available to measure a perimeter."
+            f"No mapped {role_label}line or polygon geometry is available to measure a perimeter."
         )
     if len(candidates) > 1:
         return _ambiguous(candidates, "Multiple mapped geometries could define this perimeter.")
@@ -557,7 +591,7 @@ class MockAIProvider:
         if intent == "elevation":
             return _answer_elevation(entities)
         if intent == "area":
-            return _answer_area(entities)
+            return _answer_area(question, entities)
         if intent == "perimeter":
-            return _answer_perimeter(entities)
+            return _answer_perimeter(question, entities)
         return _answer_summary(entities)
