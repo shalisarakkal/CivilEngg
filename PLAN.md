@@ -641,19 +641,35 @@ shared instance on by itself.
   idempotent on a second run)
 - [x] Regression test proving the schema round-trips through the ORM
   (`backend/tests/test_models.py::test_tenant_scopes_users_clients_and_projects`)
+- [x] A `platform_admin` role above today's install-wide `admin` (2026-09-20):
+  a strict superset — everywhere `admin` bypasses a per-project/per-install
+  restriction, `platform_admin` does too (`auth.py`'s `ADMIN_TIER_ROLES`,
+  used by `require_admin`, `is_project_member`, `is_project_owner`,
+  `require_project_owner`, the "last active admin" safety net, and every
+  admin-vs-everyone-else list-scoping check in `routes.py`). A new
+  `require_platform_admin` dependency exists for platform-only actions but
+  is not yet used by any route (nothing needs it until tenant provisioning).
+  No migration needed — `role` is an unconstrained string (ADR-009). No
+  frontend change either: `platform_admin` isn't exposed in any role picker
+  yet, since it has no user-visible effect until query scoping (below)
+  exists to actually cross a tenant boundary with it. A dedicated install
+  has no reason to ever create one, and none of the 134 existing tests
+  changed behavior. Regression tests: `test_platform_admin_is_a_superset_of_admin`,
+  `test_last_active_admin_protection_spans_both_admin_tier_roles`.
 
 **Explicitly not done in this phase** (see DECISIONS.md ADR-010's
 Consequence) — each is its own follow-on phase, not a checklist item here:
 
 - [ ] Scope every list/read query by `tenant_id` (the real isolation
   enforcement; comparable in size to Phase 15's ~34 permission call sites,
-  but a missed one is a cross-*customer* leak, not a contained permission bug)
+  but a missed one is a cross-*customer* leak, not a contained permission
+  bug). `platform_admin` from the item above is what such scoping would
+  exempt from the `tenant_id` filter, the same way `admin` is exempted from
+  today's project-ownership filters
 - [ ] Move `username` uniqueness from global to per-`(tenant_id, username)`
   (or switch to email as the identifier) — required before a second tenant
   can share the instance, since two different customers could otherwise
   collide on a username
-- [ ] A "platform admin" role tier above today's install-wide `admin`, for
-  whoever operates a shared instance, distinct from each tenant's own admin
 - [ ] Postgres Row-Level Security as a database-enforced backstop for the
   shared-instance case specifically (not needed for a dedicated instance)
 - [ ] A tenant provisioning flow (create a new tenant + its first admin) and
@@ -804,11 +820,11 @@ items above:
     - Scope every list/read query by `tenant_id` — comparable in size to
       Phase 15's ~34 permission call sites, but a missed one here is a
       cross-*customer* data leak rather than a contained permission bug.
+      (The `platform_admin` role this scoping would exempt already exists,
+      shipped 2026-09-20 — see the phase entry above.)
     - Move `username` uniqueness from global to per-`(tenant_id,
       username)`, or switch to email as the identifier — required before
       a second tenant can safely share an instance.
-    - A "platform admin" role tier distinct from today's install-wide
-      `admin`, for whoever operates a shared instance.
     - Postgres Row-Level Security as a database-enforced backstop for the
       shared-instance case specifically (a dedicated instance doesn't
       need it — the OS/database separation, or simply having only one

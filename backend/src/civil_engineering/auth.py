@@ -1,9 +1,18 @@
 """Password hashing, session management, and permission dependencies.
 
-Roles are plain strings (admin | power_user | user), validated at the
-Pydantic schema layer -- matching this codebase's existing convention of
+Roles are plain strings (platform_admin | admin | power_user | user), validated
+at the Pydantic schema layer -- matching this codebase's existing convention of
 never using a DB-level enum (see models.py's SiteModelEntity.validation_status
 and CalculationResult.calculation_type for the precedent).
+
+platform_admin (PLAN.md Phase 16, DECISIONS.md ADR-010) is a superset of admin:
+everywhere admin bypasses a per-project/per-install restriction, platform_admin
+does too, plus (once tenant-scoping exists in a later phase) across every
+tenant rather than just the one admin already sees everything within. A
+dedicated install has no reason to ever create one -- there's nothing "above"
+its single tenant to administer -- so this role only matters once a shared
+instance exists, and nothing here changes behavior for an install that
+doesn't have one.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -20,10 +29,14 @@ from civil_engineering.models import Session as SessionModel
 
 SESSION_COOKIE_NAME = "session_id"
 
+ROLE_PLATFORM_ADMIN = "platform_admin"
 ROLE_ADMIN = "admin"
 ROLE_POWER_USER = "power_user"
 ROLE_USER = "user"
-ROLES = (ROLE_ADMIN, ROLE_POWER_USER, ROLE_USER)
+ROLES = (ROLE_PLATFORM_ADMIN, ROLE_ADMIN, ROLE_POWER_USER, ROLE_USER)
+# Roles that satisfy every check written as "admin required" -- platform_admin
+# is deliberately never excluded from one of these, since it's a superset.
+ADMIN_TIER_ROLES = (ROLE_ADMIN, ROLE_PLATFORM_ADMIN)
 
 
 def hash_password(password: str) -> str:
@@ -120,8 +133,19 @@ def logout_current_session(request: Request, database: Session) -> None:
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != ROLE_ADMIN:
+    if user.role not in ADMIN_TIER_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return user
+
+
+def require_platform_admin(user: User = Depends(get_current_user)) -> User:
+    """Not yet used by any route -- plumbing for PLAN.md Phase 16's next slice
+    (tenant provisioning), where an action must be platform-wide only and a
+    regular tenant admin satisfying require_admin isn't enough."""
+    if user.role != ROLE_PLATFORM_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Platform admin role required"
+        )
     return user
 
 
@@ -138,7 +162,7 @@ def is_project_member(database: Session, project: Project, user: User) -> bool:
     baseline required to see/act on this project at all. Works regardless of
     whether the project is currently archived (unlike require_project_member,
     which is for the common active-project case)."""
-    if user.role == ROLE_ADMIN:
+    if user.role in ADMIN_TIER_ROLES:
         return True
     if project.owner_id == user.id:
         return True
@@ -151,7 +175,7 @@ def is_project_member(database: Session, project: Project, user: User) -> bool:
 
 
 def is_project_owner(project: Project, user: User) -> bool:
-    return user.role == ROLE_ADMIN or project.owner_id == user.id
+    return user.role in ADMIN_TIER_ROLES or project.owner_id == user.id
 
 
 def _get_project_or_404(database: Session, project_id: str) -> Project:
@@ -194,7 +218,7 @@ def require_project_owner(
     database: Session = Depends(get_db),
 ) -> Project:
     project = _get_project_or_404(database, project_id)
-    if user.role != ROLE_ADMIN and project.owner_id != user.id:
+    if user.role not in ADMIN_TIER_ROLES and project.owner_id != user.id:
         if not is_project_member(database, project, user):
             raise HTTPException(status_code=404, detail="Project not found")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Project owner required")

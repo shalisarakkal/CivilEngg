@@ -313,9 +313,12 @@ class User(Base):
     # docstring); tracked as a Phase 16 follow-up, not done here.
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    # admin | power_user | user -- validated in schemas.py, not a DB enum,
-    # matching this codebase's existing string-status-field convention (see
-    # SiteModelEntity.validation_status, CalculationResult.calculation_type).
+    # platform_admin | admin | power_user | user -- validated in schemas.py,
+    # not a DB enum, matching this codebase's existing string-status-field
+    # convention (see SiteModelEntity.validation_status,
+    # CalculationResult.calculation_type). platform_admin is a superset of
+    # admin (see auth.py's ADMIN_TIER_ROLES); no dedicated install has any
+    # reason to create one.
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
     # Nullable, not yet enforced -- see Tenant's docstring.
     tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"))

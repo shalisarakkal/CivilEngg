@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from civil_engineering.ai_service import MockAIProvider, route_question
 from civil_engineering.auth import (
-    ROLE_ADMIN,
+    ADMIN_TIER_ROLES,
     ROLE_POWER_USER,
     ROLE_USER,
     clear_session_cookie,
@@ -256,12 +256,15 @@ def change_own_password(
 
 
 def _require_not_last_active_admin(database: Session, target: User) -> None:
-    if target.role != ROLE_ADMIN or target.disabled_at is not None:
+    # ADMIN_TIER_ROLES, not just ROLE_ADMIN: a platform_admin can already do
+    # everything an admin can (see auth.py), so it counts toward "an
+    # admin-tier account still exists" the same way a plain admin does.
+    if target.role not in ADMIN_TIER_ROLES or target.disabled_at is not None:
         return
     other_admins = database.scalar(
         select(func.count())
         .select_from(User)
-        .where(User.role == ROLE_ADMIN, User.disabled_at.is_(None), User.id != target.id)
+        .where(User.role.in_(ADMIN_TIER_ROLES), User.disabled_at.is_(None), User.id != target.id)
     )
     if not other_admins:
         raise HTTPException(
@@ -350,7 +353,10 @@ def update_user(
     elif payload.disabled is False:
         user.disabled_at = None
     if payload.role is not None:
-        if user.role == ROLE_ADMIN and payload.role != ROLE_ADMIN:
+        # Guard only a move OUT of the admin tier entirely -- an admin <->
+        # platform_admin lateral move doesn't reduce how many admin-tier
+        # accounts exist, so it needs no check.
+        if user.role in ADMIN_TIER_ROLES and payload.role not in ADMIN_TIER_ROLES:
             _require_not_last_active_admin(database, user)
         if payload.role == ROLE_USER:
             # ADR-009: "a project's owner must be a power_user." Demoting a
@@ -475,11 +481,11 @@ def reassign_project_owner(
     # of their own (add_project_member forbids adding the current owner as a
     # member), so without adding one here they'd end up with neither owner_id
     # nor a membership row and be locked out of the project entirely, the
-    # opposite of what this is meant to do. Skipped for an admin (already has
-    # universal access) or a no-op reassignment to the same user.
+    # opposite of what this is meant to do. Skipped for an admin-tier account
+    # (already has universal access) or a no-op reassignment to the same user.
     if previous_owner_id is not None and previous_owner_id != new_owner.id:
         previous_owner = database.get(User, previous_owner_id)
-        if previous_owner is not None and previous_owner.role != ROLE_ADMIN:
+        if previous_owner is not None and previous_owner.role not in ADMIN_TIER_ROLES:
             existing_membership = database.scalar(
                 select(ProjectMembership).where(
                     ProjectMembership.project_id == project.id,
@@ -581,7 +587,7 @@ def create_project(
     data = payload.model_dump()
     if current_user.role == ROLE_POWER_USER:
         data["owner_id"] = current_user.id
-    else:  # admin
+    else:  # admin or platform_admin
         owner_id = data.get("owner_id")
         if not owner_id:
             raise HTTPException(
@@ -602,7 +608,7 @@ def list_projects(
     database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> list[Project]:
     statement = select(Project).where(Project.archived_at.is_(None)).order_by(Project.name)
-    if current_user.role != ROLE_ADMIN:
+    if current_user.role not in ADMIN_TIER_ROLES:
         statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
     return list(database.scalars(statement))
 
@@ -656,7 +662,7 @@ def list_archived_projects(
     statement = (
         select(Project).where(Project.archived_at.is_not(None)).order_by(Project.archived_at.desc())
     )
-    if current_user.role != ROLE_ADMIN:
+    if current_user.role not in ADMIN_TIER_ROLES:
         statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
     projects = database.scalars(statement)
     responses = []
@@ -1000,7 +1006,7 @@ def list_archived_files(
         .where(SourceFile.deleted_at.is_not(None))
         .order_by(SourceFile.deleted_at.desc())
     )
-    if current_user.role != ROLE_ADMIN:
+    if current_user.role not in ADMIN_TIER_ROLES:
         statement = statement.where(
             SourceFile.project_id.in_(user_owned_project_ids(database, current_user))
         )
@@ -1079,7 +1085,7 @@ def list_purge_history(
             status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
         )
     statement = select(PurgeHistoryEntry).order_by(PurgeHistoryEntry.purged_at.desc())
-    if current_user.role != ROLE_ADMIN:
+    if current_user.role not in ADMIN_TIER_ROLES:
         # project_id/resource_id cover a still-existing project's file purges;
         # purged_by_user_id covers a purged *project* itself, where the
         # ownership row that would otherwise answer "was this mine" is gone.

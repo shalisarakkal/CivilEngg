@@ -10,7 +10,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from civil_engineering.auth import ROLE_ADMIN, ROLE_POWER_USER, ROLE_USER, hash_password
+from civil_engineering.auth import (
+    ROLE_ADMIN,
+    ROLE_PLATFORM_ADMIN,
+    ROLE_POWER_USER,
+    ROLE_USER,
+    hash_password,
+)
 from civil_engineering.config import get_settings
 from civil_engineering.database import Base, get_db
 from civil_engineering.main import app
@@ -441,5 +447,69 @@ def test_reassigning_ownership_does_not_lock_out_the_previous_owner(
         assert client.get(f"/projects/{project['id']}").status_code == 200
         members = client.get(f"/projects/{project['id']}/members").json()
         assert any(member["username"] == "previous_owner" for member in members)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_platform_admin_is_a_superset_of_admin(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # PLAN.md Phase 16 / DECISIONS.md ADR-010: platform_admin is a new role
+    # sitting above today's install-wide admin, meant for whoever operates a
+    # shared instance across several tenants (not yet enforced -- that's a
+    # later phase). It must be able to do everything admin can: see every
+    # project regardless of ownership/membership, and satisfy every
+    # require_admin-gated route.
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        _seed_user(sessions, username="platform", role=ROLE_PLATFORM_ADMIN, password="secret123")
+        _seed_user(sessions, username="owner", role=ROLE_POWER_USER, password="secret123")
+
+        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        project = client.post("/projects", json={"name": "Owner's Site"}).json()
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        # Not a member of the project at all -- still fully visible/actionable.
+        assert client.get(f"/projects/{project['id']}").status_code == 200
+        assert project["id"] in [p["id"] for p in client.get("/projects").json()]
+        assert client.post(f"/projects/{project['id']}/archive").status_code == 200
+        # require_admin-gated routes.
+        assert client.get("/users").status_code == 200
+        created = client.post(
+            "/users", json={"username": "new_user", "password": "secret123", "role": "user"}
+        )
+        assert created.status_code == 201
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_last_active_admin_protection_spans_both_admin_tier_roles(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # A platform_admin counts toward "an admin-tier account still exists" the
+    # same way a plain admin does (it can already do everything admin can),
+    # and is itself protected by the same safety net -- neither role can be
+    # disabled/demoted down to zero admin-tier accounts left in the install.
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        admin_id = _seed_user(sessions, username="admin", role=ROLE_ADMIN, password="secret123")
+        platform_id = _seed_user(
+            sessions, username="platform", role=ROLE_PLATFORM_ADMIN, password="secret123"
+        )
+
+        client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        # A platform_admin exists, so disabling the only plain admin is fine.
+        assert client.patch(f"/users/{admin_id}", json={"disabled": True}).status_code == 200
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        # Re-enable admin, then confirm platform_admin itself is protected:
+        # no other admin-tier account remains once admin is plain-disabled
+        # again, so demoting/disabling the last platform_admin is blocked.
+        client.patch(f"/users/{admin_id}", json={"disabled": False})
+        client.patch(f"/users/{admin_id}", json={"disabled": True})
+        demote = client.patch(f"/users/{platform_id}", json={"role": "user"})
+        assert demote.status_code == 409
+        disable = client.patch(f"/users/{platform_id}", json={"disabled": True})
+        assert disable.status_code == 409
     finally:
         app.dependency_overrides.clear()

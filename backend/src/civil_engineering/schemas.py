@@ -205,7 +205,7 @@ class QuestionResponse(BaseModel):
     created_at: datetime
 
 
-ROLE_PATTERN = "^(admin|power_user|user)$"
+ROLE_PATTERN = "^(platform_admin|admin|power_user|user)$"
 
 
 class LoginRequest(BaseModel):
