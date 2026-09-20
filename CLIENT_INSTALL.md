@@ -216,9 +216,12 @@ cd ..
 ```
 
 Creates the `sysadmin` account (role: Admin) used to log in and create
-the client's real user accounts. `SYSADMIN_INITIAL_PASSWORD` is a
-one-shot shell variable, never written to `.env` or any file — unset it
-immediately after, as shown above.
+the client's real user accounts, and the default tenant every
+pre-existing row is backfilled onto (Phase 16 — schema-only foundation
+for also selling this as a vendor-hosted service; nothing about a
+single client's own install changes because of it). `SYSADMIN_INITIAL_PASSWORD`
+is a one-shot shell variable, never written to `.env` or any file —
+unset it immediately after, as shown above.
 
 ### 6. Build and start
 

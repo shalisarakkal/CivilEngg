@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0018_add_purge_history_purged_by (head)
+0019_add_tenants (head)
 ```
 
 Return to the project root:

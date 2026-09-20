@@ -79,6 +79,17 @@ This file records decisions that affect the project direction. Add a date, conte
   - **`purge_history.purged_by_user_id`** stores the purged resource's owner *at the time of purge* (not literally who clicked purge — an automatic retention sweep isn't a click), since the project's own ownership row disappears along with it once purged, and a Power User otherwise has no way to find their own purge history for a fully-deleted project.
 - **Consequence:** Every existing route gained a permission dependency (`require_admin`/`require_project_member`/`require_project_archive_rights`/`require_project_owner`). The 11 pre-existing backend test files needed a one-line `get_current_user` override each (`tests/auth_helpers.py`) to keep testing business logic unaffected by the new permission layer, rather than a full auth-flow retrofit. The frontend gained its first React context, first shared fetch wrapper, and first client-side route (`/login`) — none of which existed before. UI-level role-gating (hiding buttons a role can't use) and Playwright e2e coverage are not yet complete; see PLAN.md Phase 15's open work items. RISK_REGISTER.md's "Unauthenticated local API" row is updated from "Accepted limitation" to "Mitigated."
 
+## ADR-010: A `Tenant` Entity for a Hybrid Dedicated/Shared-Instance Business Model (Phase 16, foundation only)
+
+- **Status:** Accepted (schema only — see Consequence)
+- **Date:** 2026-09-20
+- **Context:** Multi-tenant SaaS was studied and deliberately not started after Phase 15 shipped (2026-09-18; see the former "Proposed Decisions" entry this ADR replaces), on the assumption it meant trading ADR-002's dedicated-install-per-firm isolation for a single shared hosted instance. Discussion on 2026-09-20 identified a second, additive business model that doesn't require that trade at all: a single customer whose infrastructure (backend, frontend, database, storage) is entirely vendor-provided and vendor-operated, but is *dedicated to that one customer* — no different from today's dedicated install except who runs the servers. A third model layers on top of that: the same vendor-operated infrastructure serving *several* subscribing customers at once, each one a `Tenant`, with no data shared between them. The first two models need no `Tenant` concept at all (isolation is already the whole install); the third does, and is the original SaaS case with the isolation requirement fully back in force. Since a customer may move between models over time (a vendor-operated dedicated instance is the natural upsell path to a shared one, and the reverse — a shared-instance customer outgrowing it into their own dedicated instance — is just as real), building two different schemas for "has a tenant" vs. "doesn't" would mean migrating a customer's data between two data models to change deployment topology.
+- **Decision:**
+  - **One schema serves all three models.** A `Tenant` table is added now; `tenant_id` (nullable) is added to `User`, `Client`, and `Project`. A dedicated install — whether the customer's own infrastructure (ADR-002) or vendor-operated-but-dedicated — has exactly one `Tenant` row, created automatically at bootstrap (`backend/scripts/create_sysadmin.py`) and never exposed to that customer. A shared instance has one `Tenant` row per subscribing customer. The application code is identical in every case; only how many `Tenant` rows exist in the database differs, which is an operational/provisioning decision, not a code branch.
+  - **Isolation rigor is deliberately NOT part of this phase.** No query anywhere is yet scoped by `tenant_id`, and no route exists to create, list, or manage a `Tenant`. This phase only proves the schema and the backfill path (see Consequence) — it is explicitly not safe to run a shared instance on this alone. See PLAN.md Phase 16's follow-on work items for what closes that gap (query scoping across every list/read endpoint, `username` uniqueness moving from global to per-`(tenant_id, username)`, a platform-admin role tier above today's install-wide `admin`, and Postgres Row-Level Security as a database-enforced backstop for the shared-instance case specifically — not needed for a dedicated instance, where the OS/database separation, or simply having only one tenant row, already provides it).
+  - **Naming and hierarchy**, confirmed as originally studied: `Tenant` sits above `Client` (`Tenant → Client → Project`), and above `User`. `Client` keeps its existing meaning ("the engineering firm's own customer," e.g. a city) — it is not renamed or repurposed to mean tenant, avoiding the collision risk flagged in the original study.
+- **Consequence:** `Tenant` model, migration `0019_add_tenants`, and `create_sysadmin.py`'s tenant-creation/backfill logic are the only things this ADR covers. Every existing list/read query is unaudited for tenant scoping and must not be assumed to enforce any isolation boundary yet — RISK_REGISTER.md carries this as an explicit open item so it isn't mistaken for done. Enforcement, the platform-admin split, and Row-Level Security are separate, larger follow-on phases, sized similarly to or larger than Phase 15 (that added a permission *layer* on unchanged data; this partitions the data itself, so a missed scoping check is a cross-*customer* leak rather than a contained permission bug).
+
 ## Resolved (not full ADRs)
 
 - Database migration tool: Alembic (`backend/migrations/`).
@@ -88,20 +99,3 @@ This file records decisions that affect the project direction. Add a date, conte
 - Background job mechanism
 - Supported coordinate reference systems
 - DWG parsing strategy
-- **Multi-tenant SaaS (`Tenant` entity above Users/Clients/Projects):**
-  considered, not started — studied in conversation after Phase 15
-  shipped (2026-09-18). This would be a deliberate strategic pivot, not
-  an additive feature: ADR-002/CLIENT_INSTALL.md already give each firm
-  its own installation and database (stronger isolation than any in-app
-  tenant column), and a `Tenant` entity means trading that for a single
-  shared hosted instance. Also a naming collision risk — the existing
-  `Client` model already means "the firm's own customer," while a
-  `Tenant` would mean "the firm paying for this software," a level
-  above it (`Tenant → Client → Project`). Structurally bigger than
-  Phase 15: that added a permission layer on unchanged data, this would
-  partition the data itself, needing every existing query re-audited
-  for tenant scoping and likely Postgres Row-Level Security as a
-  DB-enforced backstop (a deviation from this codebase's usual
-  app-layer-only validation convention, given a tenant leak is a worse
-  severity class than a role-permission leak). Full write-up: PLAN.md
-  Post-MVP Roadmap item 10.

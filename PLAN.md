@@ -616,6 +616,59 @@ DB enum, `purge_history.purged_by_user_id`).
   items above are done; Playwright verified by an actual run — 22/22
   passing — not just by reading the code)
 
+### Phase 16 - Multi-Tenant Foundation (schema only)
+
+**Objective:** Raised in conversation (2026-09-20) as a hybrid business model
+not covered by ADR-002's dedicated-install assumption: a customer whose
+infrastructure is entirely vendor-provided and vendor-operated, but
+dedicated to that one customer (no `Tenant` concept needed — it's still one
+install), versus vendor-operated infrastructure shared across several
+subscribing customers at once, each one a `Tenant`, with no data shared
+between them. See DECISIONS.md ADR-010 for the full analysis and why one
+schema serves both cases plus the original dedicated-install model, rather
+than three different data models. This phase is schema and bootstrap only —
+it deliberately does not turn on any isolation, and is not safe to run a
+shared instance on by itself.
+
+**Work items:**
+
+- [x] Add the `tenants` table and a nullable `tenant_id` on `users`,
+  `clients`, and `projects` (migration `0019_add_tenants`)
+- [x] `create_sysadmin.py` creates a default tenant and backfills every
+  pre-existing user/client/project onto it, so a dedicated install behaves
+  exactly as it did before this existed — verified end-to-end against a
+  scratch database (creates the tenant, backfills pre-existing rows,
+  idempotent on a second run)
+- [x] Regression test proving the schema round-trips through the ORM
+  (`backend/tests/test_models.py::test_tenant_scopes_users_clients_and_projects`)
+
+**Explicitly not done in this phase** (see DECISIONS.md ADR-010's
+Consequence) — each is its own follow-on phase, not a checklist item here:
+
+- [ ] Scope every list/read query by `tenant_id` (the real isolation
+  enforcement; comparable in size to Phase 15's ~34 permission call sites,
+  but a missed one is a cross-*customer* leak, not a contained permission bug)
+- [ ] Move `username` uniqueness from global to per-`(tenant_id, username)`
+  (or switch to email as the identifier) — required before a second tenant
+  can share the instance, since two different customers could otherwise
+  collide on a username
+- [ ] A "platform admin" role tier above today's install-wide `admin`, for
+  whoever operates a shared instance, distinct from each tenant's own admin
+- [ ] Postgres Row-Level Security as a database-enforced backstop for the
+  shared-instance case specifically (not needed for a dedicated instance)
+- [ ] A tenant provisioning flow (create a new tenant + its first admin) and
+  any billing/subscription metadata — not needed until a second tenant
+  actually exists on a shared instance
+
+**Exit criteria:**
+
+- [x] A dedicated install (single tenant, backfilled automatically) behaves
+  identically to before this phase — no endpoint, permission check, or test
+  changed behavior
+- [ ] Deliberately open until a follow-on phase closes it: nothing yet
+  enforces tenant isolation, so this phase alone does not make a
+  shared-instance deployment safe
+
 ## 5. Testing Strategy
 
 ### Unit tests
@@ -739,36 +792,29 @@ items above:
    calculation engine and tests would need to be re-verified against.
    This item is also what would replace [CLIENT_INSTALL.md](CLIENT_INSTALL.md)'s
    manual, interim client-site install procedure with a single installer.
-10. **Considered, not started: a `Tenant` entity for multi-tenant SaaS**
-    (`Tenant → Users, Clients, Projects`) — raised in conversation as a
-    "study this, don't build it" request after Phase 15 shipped. Full
-    analysis recorded in DECISIONS.md's Proposed Decisions; summary:
-    - This is a genuine strategic fork, not an additive feature. The
-      project has already chosen a tenant-isolation strategy, just at
-      the infrastructure level: CLIENT_INSTALL.md/DEPLOYMENT.md (ADR-002)
-      give each firm its own installation and database, which is
-      *stronger* isolation than any in-app tenant column could provide.
-      A `Tenant` entity means deliberately trading that for a single
-      shared hosted instance — better economics/ops, but now every
-      query in the codebase is a place a cross-tenant leak could happen.
-    - Naming collision to avoid: the existing `Client` model already
-      means "the engineering firm's own customer" (e.g. a city). A SaaS
-      `Tenant` would mean "the firm paying for this software" — a third
-      level above what exists today (`Tenant → Client → Project`).
-    - Bigger and structurally riskier than Phase 15: Phase 15 added a
-      permission *layer* on unchanged data; a `Tenant` entity
-      *partitions the data itself*, requiring every existing query
-      (all ~34 Phase 15 permission call sites, plus everything else) to
-      be re-audited for tenant scoping, where a mistake is a
-      cross-customer data leak rather than a contained permission bug.
-      Would warrant Postgres Row-Level Security as a DB-enforced
-      backstop, a deviation from this codebase's usual app-layer-only
-      validation convention, given the severity class.
-    - Also implies product-shape work beyond the entity itself: billing/
-      plan tiers, a tenant signup/provisioning flow, per-tenant-unique
-      (not globally-unique) usernames or a switch to email identifiers,
-      and a new "platform admin" role tier distinct from today's
-      install-wide `admin`.
+10. **`Tenant` entity for a hybrid dedicated/shared-instance business
+    model** — schema and bootstrap foundation shipped as Phase 16
+    (2026-09-20); see that phase entry above and DECISIONS.md ADR-010 for
+    the full analysis of why one schema serves a customer's own dedicated
+    install (ADR-002), a vendor-operated-but-still-dedicated install, and
+    a vendor-operated instance shared across several subscribing
+    customers. Real tenant-isolation *enforcement* is not part of Phase
+    16 and remains here as later, larger follow-on work, roughly in order
+    of what a shared instance would need first:
+    - Scope every list/read query by `tenant_id` — comparable in size to
+      Phase 15's ~34 permission call sites, but a missed one here is a
+      cross-*customer* data leak rather than a contained permission bug.
+    - Move `username` uniqueness from global to per-`(tenant_id,
+      username)`, or switch to email as the identifier — required before
+      a second tenant can safely share an instance.
+    - A "platform admin" role tier distinct from today's install-wide
+      `admin`, for whoever operates a shared instance.
+    - Postgres Row-Level Security as a database-enforced backstop for the
+      shared-instance case specifically (a dedicated instance doesn't
+      need it — the OS/database separation, or simply having only one
+      tenant row, already provides it).
+    - A tenant provisioning flow and billing/subscription metadata — not
+      needed until a second tenant actually exists on a shared instance.
 
 ## 9. Nice-to-Have Improvements
 

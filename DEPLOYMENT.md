@@ -69,7 +69,11 @@ cd ..
 
 This also backfills any project that predates Phase 15 (no owner) onto
 the new `sysadmin` account — reassign real ownership to a Power User
-account afterward via `PATCH /projects/{id}/owner`.
+account afterward via `PATCH /projects/{id}/owner` — and creates a
+default tenant (Phase 16), backfilling every pre-existing user/client/
+project onto it. See DECISIONS.md ADR-010 and RISK_REGISTER.md: this is
+schema/bootstrap only and doesn't change anything about running a single,
+dedicated instance.
 
 ## 4. Environment and secrets checklist
 

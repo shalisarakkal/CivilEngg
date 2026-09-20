@@ -1,11 +1,20 @@
-"""Create the initial 'sysadmin' admin account and backfill ownerless projects.
+"""Create the initial 'sysadmin' admin account, the default tenant, and
+backfill ownerless projects / tenant-less rows.
 
-Run once, after `npm run db:upgrade` applies migration 0017, before first use.
-No-op (besides the backfill check) if 'sysadmin' already exists.
+Run once, after `npm run db:upgrade` applies the latest migrations, before
+first use. No-op (besides the backfill checks) if 'sysadmin'/the default
+tenant already exist.
 
 The initial password is read from the SYSADMIN_INITIAL_PASSWORD environment
 variable -- never a CLI argument (visible in shell history/process lists) and
 never hardcoded, matching this project's "no secrets in git" discipline.
+
+The default tenant (DECISIONS.md ADR-010, PLAN.md Phase 16) is what makes a
+dedicated single-customer install a valid, if trivial, case of the same
+tenant model a shared instance uses: every pre-existing user/client/project
+is backfilled onto it, so the install behaves exactly as it did before this
+existed. Nothing yet reads or enforces tenant_id on any query -- this script
+only establishes the row, it doesn't turn on isolation.
 
 Usage:
     SYSADMIN_INITIAL_PASSWORD=... uv run python scripts/create_sysadmin.py
@@ -21,9 +30,10 @@ from sqlalchemy import select
 
 from civil_engineering.auth import ROLE_ADMIN, ROLE_POWER_USER, hash_password
 from civil_engineering.database import SessionLocal
-from civil_engineering.models import Project, User
+from civil_engineering.models import Client, Project, Tenant, User
 
 SYSADMIN_USERNAME = "sysadmin"
+DEFAULT_TENANT_NAME = "Default"
 
 
 def main() -> None:
@@ -54,6 +64,33 @@ def main() -> None:
             print(f"Created '{SYSADMIN_USERNAME}' (admin).")
         else:
             print(f"'{SYSADMIN_USERNAME}' already exists; leaving it unchanged.")
+
+        default_tenant = database.execute(
+            select(Tenant).where(Tenant.name == DEFAULT_TENANT_NAME)
+        ).scalar_one_or_none()
+        if default_tenant is None:
+            default_tenant = Tenant(name=DEFAULT_TENANT_NAME)
+            database.add(default_tenant)
+            database.commit()
+            database.refresh(default_tenant)
+            print(f"Created the '{DEFAULT_TENANT_NAME}' tenant.")
+        else:
+            print(f"'{DEFAULT_TENANT_NAME}' tenant already exists; leaving it unchanged.")
+
+        tenantless_count = 0
+        for model in (User, Client, Project):
+            tenantless = (
+                database.execute(select(model).where(model.tenant_id.is_(None))).scalars().all()
+            )
+            for row in tenantless:
+                row.tenant_id = default_tenant.id
+            tenantless_count += len(tenantless)
+        if tenantless_count:
+            database.commit()
+            print(
+                f"Backfilled {tenantless_count} pre-existing row(s) onto the "
+                f"'{DEFAULT_TENANT_NAME}' tenant."
+            )
 
         ownerless = (
             database.execute(select(Project).where(Project.owner_id.is_(None))).scalars().all()

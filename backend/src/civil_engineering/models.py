@@ -12,8 +12,18 @@ def new_id() -> str:
     return str(uuid4())
 
 
-class Client(Base):
-    __tablename__ = "clients"
+class Tenant(Base):
+    """The isolation boundary for the hybrid deployment model of DECISIONS.md
+    ADR-010 (Phase 16): a dedicated, single-customer install has exactly one
+    Tenant row, created automatically at bootstrap and never seen by that
+    customer (see create_sysadmin.py); a shared instance serving several
+    subscribing customers has one Tenant row per customer. Schema only for
+    now -- nothing yet reads or enforces tenant_id on any query, and no route
+    exists to create, list, or manage a Tenant. See RISK_REGISTER.md and
+    PLAN.md Phase 16 for what's deliberately not built yet.
+    """
+
+    __tablename__ = "tenants"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -21,8 +31,24 @@ class Client(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    # Nullable, not yet enforced -- see Tenant's docstring. ondelete="SET NULL"
+    # (matching Project.client_id below) rather than leaving a delete to fail,
+    # even though nothing deletes a Tenant today.
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    tenant: Mapped[Tenant | None] = relationship()
     projects: Mapped[list["Project"]] = relationship(back_populates="client")
 
 
@@ -31,6 +57,8 @@ class Project(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     client_id: Mapped[str | None] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"))
+    # Nullable, not yet enforced -- see Tenant's docstring.
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     default_unit_system: Mapped[str] = mapped_column(String(32), nullable=False, default="imperial")
@@ -47,6 +75,7 @@ class Project(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     client: Mapped[Client | None] = relationship(back_populates="projects")
+    tenant: Mapped[Tenant | None] = relationship()
     owner: Mapped["User | None"] = relationship(foreign_keys=[owner_id])
     source_files: Mapped[list["SourceFile"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
@@ -278,12 +307,18 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    # Globally unique today. A shared instance serving several tenants will
+    # need this scoped to (tenant_id, username) instead -- deliberately not
+    # changed yet, since tenant_id isn't enforced anywhere (see Tenant's
+    # docstring); tracked as a Phase 16 follow-up, not done here.
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     # admin | power_user | user -- validated in schemas.py, not a DB enum,
     # matching this codebase's existing string-status-field convention (see
     # SiteModelEntity.validation_status, CalculationResult.calculation_type).
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    # Nullable, not yet enforced -- see Tenant's docstring.
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -291,6 +326,8 @@ class User(Base):
     # Presence signals disabled, absence signals active -- same idiom as
     # Project.archived_at/SourceFile.deleted_at rather than a new bool flag.
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    tenant: Mapped[Tenant | None] = relationship()
 
 
 class Session(Base):

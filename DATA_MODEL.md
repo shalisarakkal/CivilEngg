@@ -10,9 +10,25 @@
 
 ## Initial Entities
 
+### Tenant
+
+Added in Phase 16 (schema/bootstrap only — see DECISIONS.md ADR-010,
+RISK_REGISTER.md). The isolation boundary for a hybrid deployment model: a
+dedicated single-customer install (whether the customer's own infrastructure
+or vendor-operated) has exactly one row, created automatically at bootstrap;
+a vendor-operated instance shared across several subscribing customers has
+one row per customer. `User`, `Client`, and `Project` each carry a nullable
+`tenant_id`. Nothing yet reads or enforces it on any query.
+
+- `id`
+- `name`
+- `created_at`
+- `updated_at`
+
 ### Client
 
 - `id`
+- `tenant_id` (nullable; see Tenant above)
 - `name`
 - `created_at`
 - `updated_at`
@@ -22,6 +38,7 @@
 
 - `id`
 - `client_id`
+- `tenant_id` (nullable; see Tenant above)
 - `name`
 - `description`
 - `default_unit_system`
@@ -177,3 +194,5 @@ SourceFile 1 -- 1 SourceFile                  (superseded_by_id, optional: the f
 ## Open Modeling Questions
 
 - Which projected coordinate reference systems to support explicitly. Whether a geographic (lat/lon) CRS should be rejected is settled: it is (see RISK_REGISTER.md) — a project cannot adopt one, and planar measurements are refused for any project that already carries one.
+- How `Tenant` scoping is actually enforced (query-level filtering, and whether `User.username` moves from globally unique to unique per tenant) — see RISK_REGISTER.md and PLAN.md Phase 16's explicitly-deferred follow-on items.
+- `User`, `Session`, and `ProjectMembership` (added in Phase 15) are not yet documented in "Initial Entities" above — a pre-existing gap noted here rather than backfilled in this pass.
