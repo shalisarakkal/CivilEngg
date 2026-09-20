@@ -322,3 +322,124 @@ def test_non_admin_can_look_up_a_username_but_not_list_all_users(
         assert client.get("/users").status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+def test_revision_ids_are_scoped_to_the_requesting_project(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test (cross-project IDOR found via code review): _resolve_revision_ids
+    # returned a caller-supplied revision_ids list as-is, with no check that those
+    # revisions belong to the project in the URL. A member of Project A could name a
+    # revision id from Project B -- which they have no membership/ownership
+    # relationship to at all -- on POST /projects/A/questions or /summaries, and
+    # Project B's site-model entities would be pulled into the answer (and
+    # persisted on Project A's own QuestionAnswer/ProjectSummary row).
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        _seed_user(sessions, username="owner_b", role=ROLE_POWER_USER, password="secret123")
+        _seed_user(sessions, username="owner_a", role=ROLE_POWER_USER, password="secret123")
+
+        client.post("/auth/login", json={"username": "owner_b", "password": "secret123"})
+        project_b = client.post("/projects", json={"name": "Confidential Site B"}).json()
+        uploaded = client.post(
+            f"/projects/{project_b['id']}/files",
+            files={"file": ("survey.txt", b"elevation=999.99", "text/plain")},
+        ).json()
+        client.post(f"/projects/{project_b['id']}/files/{uploaded['id']}/process")
+        revision_b = client.post(
+            f"/projects/{project_b['id']}/site-model/revisions/from-extraction/{uploaded['id']}"
+        ).json()
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"username": "owner_a", "password": "secret123"})
+        project_a = client.post("/projects", json={"name": "Site A"}).json()
+
+        # owner_a is a member of Project A only, and names Project B's revision.
+        question = client.post(
+            f"/projects/{project_a['id']}/questions",
+            json={"question": "Summarize the site", "revision_ids": [revision_b["id"]]},
+        )
+        assert question.status_code == 200
+        # The cross-project id was dropped entirely, not honored: no revisions
+        # resolved, so none are recorded against Project A's own question.
+        assert question.json()["revision_ids"] is None
+
+        summary = client.post(
+            f"/projects/{project_a['id']}/summaries",
+            params={"revision_ids": [revision_b["id"]]},
+        )
+        assert summary.status_code == 200
+        assert summary.json()["revision_ids"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_demoting_a_project_owner_to_user_role_is_blocked(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test (found via code review): update_user's disable branch calls
+    # _require_no_owned_projects, but the role-change branch right below it did
+    # not -- an admin could demote a power_user who still owns an active project
+    # straight to role="user". require_project_owner only checks
+    # `project.owner_id == user.id`, not the owner's current role, so that
+    # demoted account kept full owner-level rights (archive, permanently purge,
+    # manage members, reassign ownership) on the project, directly contradicting
+    # ADR-009's "a project's owner must be a power_user" and the `user` role
+    # never having archive/purge rights "anywhere".
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        _seed_user(sessions, username="admin", role=ROLE_ADMIN, password="secret123")
+        owner_id = _seed_user(
+            sessions, username="owner", role=ROLE_POWER_USER, password="secret123"
+        )
+
+        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        project = client.post("/projects", json={"name": "Owned Site"}).json()
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        demote = client.patch(f"/users/{owner_id}", json={"role": "user"})
+        assert demote.status_code == 422
+        client.post("/auth/logout")
+
+        # The demotion never took effect -- the owner keeps their power_user
+        # role and their project's owner-level rights, unaffected either way.
+        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        assert client.post(f"/projects/{project['id']}/archive").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reassigning_ownership_does_not_lock_out_the_previous_owner(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test (found via code review): reassign_project_owner's own
+    # comment claimed "the old owner keeps theirs [membership] unless explicitly
+    # removed", but no code path ever granted the outgoing owner a membership
+    # row -- an owner never has one in the first place (add_project_member
+    # forbids adding the current owner as a member). After reassignment the
+    # previous (non-admin) owner had neither owner_id nor a membership row and
+    # was locked out of the project entirely, contradicting both the comment
+    # and the frontend's "you keep your own access unless removed separately"
+    # copy.
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        new_owner_id = _seed_user(
+            sessions, username="new_owner", role=ROLE_POWER_USER, password="secret123"
+        )
+        _seed_user(sessions, username="previous_owner", role=ROLE_POWER_USER, password="secret123")
+
+        client.post("/auth/login", json={"username": "previous_owner", "password": "secret123"})
+        project = client.post("/projects", json={"name": "Handoff Site"}).json()
+        reassign = client.patch(f"/projects/{project['id']}/owner", json={"owner_id": new_owner_id})
+        assert reassign.status_code == 200
+        client.post("/auth/logout")
+
+        # The previous owner should still be able to see and work on the
+        # project as a collaborator, not be locked out of it entirely.
+        client.post("/auth/login", json={"username": "previous_owner", "password": "secret123"})
+        assert client.get(f"/projects/{project['id']}").status_code == 200
+        members = client.get(f"/projects/{project['id']}/members").json()
+        assert any(member["username"] == "previous_owner" for member in members)
+    finally:
+        app.dependency_overrides.clear()

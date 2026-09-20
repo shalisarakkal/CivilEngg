@@ -1,4 +1,9 @@
-from civil_engineering.ai_service import MockAIProvider, route_question, sanitize_source_text
+from civil_engineering.ai_service import (
+    MockAIProvider,
+    _question_role,
+    route_question,
+    sanitize_source_text,
+)
 
 
 def test_question_routing_and_mock_provider_are_deterministic() -> None:
@@ -162,6 +167,23 @@ def test_directional_parsing_does_not_misfire_on_east_as_a_word_fragment() -> No
     # misdetected as a compass-direction question.
     assert route_question("Is the building's setback at least 25 ft?") != "directional_distance"
     assert route_question("What is the distance to the northeast corner?") != "directional_distance"
+
+
+def test_question_role_does_not_misfire_on_substring_or_break_on_plurals() -> None:
+    # Regression test found via code review of the same commit that added the
+    # "tree"/"lot" role phrases (PLAN.md Phase 14): _question_role matched them as
+    # bare substrings, so "tree" falsely matched inside "street" and (before "lot"
+    # was dropped entirely, since it's also an ordinary English word) "lot" falsely
+    # matched inside "a lot of". Word-boundary matching fixes both, but must still
+    # recognize an ordinary plural ("trees", "buildings") -- a naive `\bword\b`
+    # regex does not match "trees" at all, since there is no boundary between
+    # "tree" and its own trailing "s".
+    assert _question_role("What is the distance to the street?") is None
+    assert _question_role("There are a lot of manholes shown") is None
+    assert _question_role("How many existing trees are shown?") == "tree"
+    assert _question_role("How many buildings are shown?") == "building_footprint"
+    assert _question_role("How many sidewalks are shown?") == "sidewalk"
+    assert _question_role("What are the parcels shown?") == "parcel_boundary"
 
 
 def test_summarize_reports_grading_drainage_utilities_and_attention_flags() -> None:

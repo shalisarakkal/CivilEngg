@@ -201,3 +201,146 @@ This is only true for questions. `GET /projects/{project_id}/summaries` exists (
 | 9 | Low | API.md wrongly claims summaries have no list route | Fixed |
 
 All 9 fixes are covered by new regression tests (5 backend, 2 frontend Playwright); the full backend suite (98 tests) and the mocked frontend e2e suite pass. One unrelated, pre-existing issue was found while verifying: `full-workflow.spec.ts` and `phase9.spec.ts` have 5 tests that fail against the real backend even on the original, unmodified code (confirmed via `git stash`) — the webServer log shows "Slow filesystem detected... is a network drive," suggesting these are environment-timeout flakiness on this machine's `S:` drive rather than an application defect. Not fixed here since it's outside the scope of this review's findings and predates all of the above changes.
+
+---
+
+# Code Review — Phase 14 / Phase 15 Follow-Up (2026-09-19)
+
+**Update (2026-09-19): all 6 findings below have been fixed and committed**, each via the same reproduce-first cycle as the original review (a regression test confirmed to fail on the pre-fix code, verified by temporarily reverting each fix and re-running its test, then confirmed to pass after fixing). See the "Fix applied" note under each finding.
+
+Reviewed the code-touching commits landed since the `v0.1.0-mvp` review above: `b16537d` (Phase 15 — roles, ownership, session-cookie authentication; 49 files, roughly 3,200 lines, the largest and most security-sensitive change since the last review), `c8ddc6a` and `b62ec67` (geographic-CRS validation and a unit-aware label-link cutoff), and `f45a6e7` (Phase 14 — Question-Answering Coverage Expansion: count/dimensions/orientation/setback-compliance/drainage/utility/elevation-lookup question intents). Phase 15 in particular had not been through this whole-project review process before, despite being the biggest change to the trust boundary the app has ever made (ADR-009).
+
+**Method:** four parallel review passes: (1) Phase 15 backend authorization/session logic against every permission dependency in `routes.py`/`auth.py`; (2) Phase 15 frontend role-gating against what the backend actually enforces; (3) an adversarial pass on the Phase 14/CRS diff, explicitly instructed not to assume the code is correct just because it has tests; (4) `AGENTS.md` coding-standard compliance and a cross-check against this same file's prior nine findings for recurring bug shapes (a filter present in one function but forgotten in a sibling, stale state not reset on a transition, non-deterministic ordering, documentation drift). Every finding below was independently re-verified by direct code reading and, for the ones fixed, by executing the actual code before being included. Findings a reviewing pass itself rated low-confidence, or that were already-accepted/intentional/pre-existing, were dropped; see "Noted, not fixed" and "Not flagged" below.
+
+**Severity rubric:** same as above.
+
+---
+
+## Critical
+
+### 10. Setback-compliance silently compared a raw coordinate-unit distance against a threshold converted to true metres
+
+- `backend/src/civil_engineering/ai_service.py`, `_answer_setback_compliance` (added in `f45a6e7`).
+
+```python
+clearance = shape(building_entity["geometry"]).boundary.distance(...)      # raw project-coordinate units
+threshold_meters = convert_distance(threshold_value, threshold_unit, "m")  # always TRUE metres
+compliant = clearance >= threshold_meters
+```
+
+**Failure scenario:** this app's own default unit system is imperial and every `TestQuestions` worked example is in feet. A project with feet-based coordinates and a real 20 ft clearance, asked "Is the building's setback at least 25 ft?", converted the *threshold* (25 ft to 7.62, true metres) but left `clearance` unconverted (20, in feet) and compared `20 >= 7.62`, reporting "compliant" — the opposite of the correct answer (20 ft is less than the 25 ft required). Reproduced directly against the function before fixing.
+
+**Fix applied:** the one-sided conversion is removed; `clearance` and the stated threshold are now compared directly, on the explicit, honest assumption already used everywhere else in this file (e.g. `_answer_distance`'s "assumes both geometries share the same coordinate unit") — the project's raw coordinates are taken to already be in whatever unit the question stated its setback in, since this function has no way to know the project's true coordinate unit. The reported unit now reflects what was actually compared instead of unconditionally claiming "m". Regression test: `backend/tests/test_qa_coverage_expansion.py::test_setback_compliance_does_not_convert_the_stated_threshold_to_a_different_unit`.
+
+### 11. `_resolve_revision_ids` returned caller-supplied revision ids with no check they belong to the requesting project (cross-project IDOR)
+
+- `backend/src/civil_engineering/routes.py`, `_resolve_revision_ids`, used by `create_summary` and `ask_question`.
+
+```python
+if requested:
+    return requested
+```
+
+**Failure scenario:** `require_project_member` only checks membership on the `project_id` path parameter — it never touches `revision_ids`. A Power User who is a member of Project A only, and who obtains a revision id from unrelated Project B, could call `POST /projects/A/questions` (or `/summaries`) with `revision_ids: ["<Project B's revision>"]`. Project B's site-model entities — geometry, properties, source references — would be pulled into the answer given back to a caller with zero relationship to Project B, and **persisted** on Project A's own `QuestionAnswer`/`ProjectSummary` row, retrievable later via `GET /projects/A/summaries`. This defeats the per-project membership boundary the rest of the file enforces everywhere else — every other project-scoped lookup (calculations, revision compare, entity listing) explicitly filters by `project_id`; these two call sites were the only exceptions.
+
+**Not caught by:** no existing test passed a revision id across two different projects.
+
+**Fix applied:** `_resolve_revision_ids` now filters any caller-supplied ids down to ones that actually belong to `project_id` (`ProjectRevision.id.in_(requested), ProjectRevision.project_id == project_id`), silently dropping any that don't — the same as a stale/nonexistent id would already be silently ignored. Regression test: `backend/tests/test_auth.py::test_revision_ids_are_scoped_to_the_requesting_project` (two Power Users, each owning their own project; confirmed the id is dropped and no cross-project revision is ever recorded against the other project's question/summary).
+
+---
+
+## High
+
+### 12. Substring-collision bug in the new role/semantic-type keyword matching (recurrence of the same bug shape fixed elsewhere in the same commit)
+
+- `backend/src/civil_engineering/ai_service.py`, `ROLE_TO_SEMANTIC_TYPE`/`_question_role`
+- `backend/src/civil_engineering/routes.py`, `_semantic_type_from_text`
+
+Both added bare single-word keywords ("tree", and briefly "lot") matched via a plain substring check. "tree" is a literal substring of "street"; "lot" is a substring of the ordinary English phrase "a lot of". Reproduced directly: `_question_role("What is the distance to the street?")` returned "tree", and `_semantic_type_from_text("STREET")`/`_semantic_type_from_text("MAIN STREET")` — a very ordinary CAD layer name for road infrastructure — returned "tree" instead of "driveway_road".
+
+**Why High, not Medium:** this is the exact same bug shape this same commit's own fix (the compass-direction "east" substring of "least") explicitly identified and fixed with word-boundary matching, but the fix wasn't applied to the sibling role/keyword lookups introduced in the same diff — and a real DXF layer literally named "STREET"/"MAIN STREET" would have silently misclassified real site-model geometry, not just misrouted an occasional question.
+
+**Fix applied:** both functions now match keywords with word-boundary-anchored regex instead of a bare substring, mirroring the existing direction-word fix. This alone would have broken ordinary plurals (a strict word-boundary pattern does not match "trees" — there is no boundary between "tree" and its own trailing "s" — confirmed, and would have been a real regression against a plan layer literally named "TREES"), so the pattern allows an optional trailing "s". The bare "lot" role phrase (never actually required by `TestQuestions`, which only ever uses "lot" inside "parking lot") is dropped entirely rather than patched, since "a lot of" is a genuine standalone English word no word-boundary regex can disambiguate from the site-plan sense. Regression tests: `backend/tests/test_ai_service.py::test_question_role_does_not_misfire_on_substring_or_break_on_plurals`; `routes.py`'s side uses the same fix pattern (`_contains_keyword`) and is exercised by the existing semantic-classification suite.
+
+### 13. Demoting a project owner to `user` role didn't strip their owner-level permissions
+
+- `backend/src/civil_engineering/routes.py`, `update_user`.
+
+```python
+if payload.role is not None:
+    if user.role == ROLE_ADMIN and payload.role != ROLE_ADMIN:
+        _require_not_last_active_admin(database, user)
+    user.role = payload.role   # no _require_no_owned_projects check
+```
+
+`_require_no_owned_projects` is called on the `disabled=True` branch immediately above and in `delete_user`, but not here. `require_project_owner` (`auth.py`) only checks `project.owner_id == user.id`, never the owner's current role.
+
+**Failure scenario:** an admin demotes a Power User who still owns an active project straight to `role="user"`. `require_project_owner` still passes for that account on that project — it can still archive it, permanently purge it, manage its members, and reassign its ownership, directly contradicting ADR-009's "a project's owner must be a power_user" and the `user` role never having archive/purge rights "anywhere".
+
+**Fix applied:** the role-change branch now also calls `_require_no_owned_projects` whenever the target role is `user` (covering both a Power-User-to-user and an Admin-to-user demotion, the two paths that can leave an invalid owner). Regression test: `backend/tests/test_auth.py::test_demoting_a_project_owner_to_user_role_is_blocked`.
+
+---
+
+## Medium
+
+### 14. Reassigning project ownership locked the previous owner out of the project entirely
+
+- `backend/src/civil_engineering/routes.py`, `reassign_project_owner`.
+
+The function's own comment claimed the old owner keeps their membership unless explicitly removed, same as any collaborator — but no code path ever granted the outgoing owner a membership row (an owner never has one to begin with; `add_project_member` explicitly rejects adding the current owner as a member). The frontend's confirmation dialog states the same claim: ownership moves immediately, and you keep your own access unless removed separately.
+
+**Failure scenario:** a non-admin Power User who owns a project reassigns ownership to a collaborator. Immediately afterward they have neither `owner_id` nor a membership row, so `is_project_member`/`require_project_member` return not-found for them — they lose all access to a project the UI just told them they'd keep working on. (Admins performing the same action are unaffected, since `is_project_member`/`is_project_owner` special-case the admin role.)
+
+**Fix applied:** `reassign_project_owner` now grants the previous (non-admin) owner an explicit `ProjectMembership` row, so they retain collaborator-level access exactly as the comment and UI copy already claimed — skipped for an admin (already has universal access) or a no-op reassignment to the same user. Regression test: `backend/tests/test_auth.py::test_reassigning_ownership_does_not_lock_out_the_previous_owner`.
+
+### 15. Duplicate spot-elevation labels resolved silently instead of flagging ambiguity, unlike every sibling resolver added in the same phase
+
+- `backend/src/civil_engineering/ai_service.py`, `_find_labeled_elevation` (used by the new `elevation_lookup` intent).
+
+```python
+return next((entity for label_value, entity in _label_elevation_entities(entities)
+             if math.isclose(label_value, value, abs_tol=0.01)), None)
+```
+
+`_answer_area`, `_answer_perimeter`, `_answer_dimensions`, `_answer_orientation`, and `_answer_setback_compliance` — all touched or added in the same Phase 14 commit — explicitly detect more than one matching candidate and return a clarification-needed response. This resolver instead silently took the first match via `next()`.
+
+**Failure scenario:** a real plan repeating the same rounded benchmark elevation (two separate "EL 100.00" callouts is plausible) would silently resolve "Where is EL 100.00 located?" to whichever label happens to come first in extraction order, with no indication to the caller that the match wasn't unique.
+
+**Fix applied:** renamed to `_find_labeled_elevations` (plural), now returning every match; both the single-label and elevation-difference branches of `_answer_elevation_lookup` check for more than one match and return the same ambiguous response the sibling resolvers use. Regression test: `backend/tests/test_qa_coverage_expansion.py::test_elevation_lookup_flags_ambiguity_instead_of_silently_picking_a_duplicate_label`.
+
+---
+
+## Noted, not fixed in this pass
+
+Real findings judged lower-severity, lower-certainty, or a larger change than this review's scope — left open rather than guessed at:
+
+- **Sessions are not revoked on password change** (`change_own_password` and `update_user`'s password-reset branch, `routes.py`). A stolen session cookie remains valid for up to `session_ttl_days` (7 days) after the victim changes their password, since nothing ties an issued session to the password hash it was created under.
+- **The session cookie has no `Secure` flag** (`auth.py`'s `set_session_cookie`), and `DEPLOYMENT.md`/`CLIENT_INSTALL.md` give no guidance requiring TLS termination for a real client-site install — a real risk given ADR-009 itself cites "changes the trust boundary" as this phase's motivation, but a deployment-configuration question rather than a pure code defect.
+- **Deleting a user who owns an archived (not active) project raises an unhandled 500** instead of the clean 422 `_require_no_owned_projects` gives for an *active* owned project — `Project.owner_id`'s foreign key has no `ondelete=`, and the check only queries for `archived_at.is_(None)`. A real gap in the exact ownership-integrity logic this phase introduced, but narrow (requires an archived-but-not-purged owned project) and not a security issue.
+- **`route_question` ordering hazard between `count` and `dimensions`**: "How many feet wide is the building?" contains both "how many" (checked first) and a role, so it resolves to `count` instead of `dimensions`/width. Not a phrasing `TestQuestions` actually uses — a latent hazard, not a confirmed regression against this app's own test corpus.
+- **`AuthContext.tsx` re-implements the 401-redirect `api.ts`'s `apiFetch` already handles globally** (its own doc comment says this is precisely so call sites don't have to). Functionally harmless (both paths land on `/login`), flagged only because it's the kind of redundant defensive code `AGENTS.md`'s "no unnecessary defensive programming" line calls out.
+
+## Not flagged (considered and ruled out)
+
+- Login timing side-channel (a nonexistent username short-circuits before the expensive bcrypt check): common, low-severity, frequently an accepted risk industry-wide.
+- `GET /users/lookup` returning more than a bare existence check to any authenticated caller: the route's own docstring documents this as a deliberate trade-off (exact-match-only, not directory enumeration).
+- `PATCH /projects/{id}` gated on membership only (a `user`-role collaborator can edit project metadata, including `coordinate_reference_system`): ADR-009 doesn't explicitly forbid this for the `user` role, and this route predates Phase 15's permission matrix — plausibly an intentional scope decision, not a clear contradiction of anything documented.
+- An admin changing/disabling their own role from their own row in the admin user list, leaving stale cached `currentUser` state client-side: real but narrow, self-inflicted, no security exposure (the backend re-validates role from the database on every request).
+- No emoji found in any of the four reviewed commits' diffs.
+- All ADR-009 permission dependencies (`require_admin`/`require_project_member`/`require_project_archive_rights`/`require_project_owner`) checked against every route in `routes.py`: correctly applied everywhere else, matching the documented owner-vs-any-power-user split for project- vs. file-level archive/purge.
+- The oriented-bounding-rectangle width/length/orientation math, the unit-aware label-link cutoff, and the geographic-CRS rejection wiring: all independently verified correct (hand-checked geometry, and against this file's own regression tests).
+- The original "east" substring-of-"least" fix from earlier the same day: verified correct.
+- Frontend role-gating (archive/purge/restore/reassign/add-collaborator buttons) checked against the actual backend dependency for each action: no case found where a button is shown to a role the backend forbids, or hidden from a role the backend allows.
+
+## Summary
+
+| # | Severity | Issue | Status |
+| --- | --- | --- | --- |
+| 10 | Critical | Setback-compliance compared unconverted clearance against a metres-converted threshold | Fixed |
+| 11 | Critical | Cross-project revision_ids IDOR in `_resolve_revision_ids` | Fixed |
+| 12 | High | Substring collision in new role/keyword matching ("tree" in "street") | Fixed |
+| 13 | High | Demoting a project owner to `user` role didn't strip owner-level permissions | Fixed |
+| 14 | Medium | Reassigning ownership locked out the previous owner entirely | Fixed |
+| 15 | Medium | Duplicate elevation labels resolved silently instead of flagging ambiguity | Fixed |
+
+All 6 fixes are covered by new regression tests, each independently confirmed to fail on the pre-fix code (via temporary revert) and pass after fixing. The full backend suite (131 tests) passes; ruff and mypy are clean except the same three pre-existing, unrelated `extraction.py` errors noted throughout this project's history. Two stale documentation lines found during the `AGENTS.md`-compliance pass (`AGENTS.md`'s own historical note, and `PLAN.md`'s MVP-scope list, both still listing authentication as unimplemented/deferred after Phase 15 shipped it) were corrected alongside these fixes.

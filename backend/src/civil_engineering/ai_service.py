@@ -13,7 +13,6 @@ from civil_engineering.calculations import (
     calculate_distance,
     calculate_perimeter,
     calculate_slope,
-    convert_distance,
 )
 from civil_engineering.site_model import is_geographic_crs
 
@@ -31,11 +30,11 @@ DIRECTION_AXES: dict[str, tuple[int, float]] = {
 }
 
 # Question-language role -> the semantic_type classification it refers to (see
-# routes.py's _classify_entity). Longer, more specific phrases are not required to come
-# first EXCEPT where a shorter phrase for one role is itself a substring of a longer
-# phrase for a *different* role (e.g. "lot" inside "parking lot") -- those pairs must
-# keep the more specific phrase earlier, since _question_role returns the first
-# substring match in insertion order. "lot" bare is deliberately last for this reason.
+# routes.py's _classify_entity). Matched as whole words (see _question_role), so
+# ordering between phrases for different roles doesn't matter here -- unlike a bare
+# substring match, "parking" and "parking lot" can't collide with an unrelated role's
+# phrase the way "lot" would collide with the ordinary English phrase "a lot of" (a
+# bare "lot" role phrase was tried and dropped for exactly that reason).
 ROLE_TO_SEMANTIC_TYPE = {
     "property line": "parcel_boundary",
     "property boundary": "parcel_boundary",
@@ -63,7 +62,6 @@ ROLE_TO_SEMANTIC_TYPE = {
     "retention basin": "detention_basin",
     "detention pond": "detention_basin",
     "basin": "detention_basin",
-    "lot": "parcel_boundary",
 }
 
 # Question intents answered by measuring positions on a plane. They need a projected
@@ -177,7 +175,19 @@ def _question_role(question: str) -> str | None:
     """The semantic_type a role phrase in the question refers to (see
     ROLE_TO_SEMANTIC_TYPE), or None if the question doesn't name one."""
     normalized = question.lower()
-    role = next((phrase for phrase in ROLE_TO_SEMANTIC_TYPE if phrase in normalized), None)
+    # Word-boundary match, not a bare substring: a short bare phrase like "tree"
+    # is a literal substring of an unrelated word ("street") -- the same hazard
+    # fixed for DIRECTION_AXES below. An optional trailing "s" still matches an
+    # ordinary plural ("trees", "buildings") without a boundary between the
+    # phrase and the "s" defeating the match entirely.
+    role = next(
+        (
+            phrase
+            for phrase in ROLE_TO_SEMANTIC_TYPE
+            if re.search(rf"\b{re.escape(phrase)}s?\b", normalized)
+        ),
+        None,
+    )
     return ROLE_TO_SEMANTIC_TYPE[role] if role is not None else None
 
 
@@ -781,14 +791,14 @@ def _answer_setback_compliance(question: str, entities: list[dict[str, Any]]) ->
     if threshold is None:
         return {
             "answer": (
-                f"The building footprint is approximately {clearance:.3f} m from the parcel "
-                "boundary. No specific required setback distance was stated in the question, "
-                "so compliance cannot be determined automatically."
+                f"The building footprint is approximately {clearance:.3f} coordinate units "
+                "from the parcel boundary. No specific required setback distance was stated "
+                "in the question, so compliance cannot be determined automatically."
             ),
             "method": "deterministic geometry calculation",
             "formula": "distance(building footprint boundary, parcel boundary)",
             "result": clearance,
-            "unit": "m",
+            "unit": "coordinate units",
             "source_references": source_references,
             "limitations": [
                 "No required setback value was supplied in the question; only the "
@@ -797,22 +807,32 @@ def _answer_setback_compliance(question: str, entities: list[dict[str, Any]]) ->
             "confidence": 0.75,
         }
     threshold_value, threshold_unit = threshold
-    threshold_meters = convert_distance(threshold_value, threshold_unit, "m")
-    compliant = clearance >= threshold_meters
+    # Compared directly, not converted: this function has no way to know what real
+    # unit the project's raw coordinates are actually in (that lives on the
+    # Project, never passed down here), so converting only the *threshold* to true
+    # metres while leaving `clearance` in whatever unit the coordinates happen to
+    # be would silently compare mismatched units -- e.g. a real 20 ft clearance
+    # against a stated "at least 25 ft" setback would wrongly convert 25 ft to
+    # 7.62 (true metres) and report "compliant" (20 >= 7.62) when it is not. The
+    # honest alternative is the same assumption already used throughout this file
+    # (e.g. _answer_distance): the caller's stated unit is taken to match the
+    # project's own coordinate unit.
+    compliant = clearance >= threshold_value
     return {
         "answer": (
-            f"The building footprint is approximately {clearance:.3f} m from the parcel "
-            f"boundary, which is {'at least' if compliant else 'less than'} the stated "
-            f"{threshold_value:g} {threshold_unit} setback "
+            f"The building footprint is approximately {clearance:.3f} {threshold_unit} from "
+            f"the parcel boundary, which is {'at least' if compliant else 'less than'} the "
+            f"stated {threshold_value:g} {threshold_unit} setback "
             f"({'compliant' if compliant else 'not compliant'})."
         ),
         "method": "deterministic geometry calculation",
         "formula": "distance(building footprint boundary, parcel boundary) >= stated setback",
         "result": clearance,
-        "unit": "m",
+        "unit": threshold_unit,
         "source_references": source_references,
         "limitations": [
-            "Assumes the stated setback and the project's coordinates use compatible units.",
+            "Assumes the project's coordinates are already measured in the same unit as "
+            "the stated setback; no unit conversion is applied.",
             "Checks clearance from the parcel boundary itself; does not account for a "
             "separate setback line that differs from the property line.",
         ],
@@ -942,15 +962,18 @@ def _label_elevation_entities(entities: list[dict[str, Any]]) -> list[tuple[floa
     return labeled
 
 
-def _find_labeled_elevation(entities: list[dict[str, Any]], value: float) -> dict[str, Any] | None:
-    return next(
-        (
-            entity
-            for label_value, entity in _label_elevation_entities(entities)
-            if math.isclose(label_value, value, abs_tol=0.01)
-        ),
-        None,
-    )
+def _find_labeled_elevations(entities: list[dict[str, Any]], value: float) -> list[dict[str, Any]]:
+    """Every plan label matching `value` -- deliberately not just the first, unlike
+    an earlier version of this function: a real plan can repeat the same rounded
+    spot elevation (e.g. two separate "EL 100.00" benchmarks), and picking one
+    silently (extraction-order-dependent) would be exactly the kind of unflagged
+    ambiguity every sibling resolver in this file (_answer_area, _answer_dimensions,
+    _answer_setback_compliance, etc.) explicitly refuses to do."""
+    return [
+        entity
+        for label_value, entity in _label_elevation_entities(entities)
+        if math.isclose(label_value, value, abs_tol=0.01)
+    ]
 
 
 def _answer_elevation_lookup(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
@@ -961,18 +984,28 @@ def _answer_elevation_lookup(question: str, entities: list[dict[str, Any]]) -> d
     values = _extract_el_tokens(question)
     if len(values) >= 2:
         first_value, second_value = values[0], values[1]
-        first_label = _find_labeled_elevation(entities, first_value)
-        second_label = _find_labeled_elevation(entities, second_value)
+        first_matches = _find_labeled_elevations(entities, first_value)
+        second_matches = _find_labeled_elevations(entities, second_value)
         missing = [
             f"EL {value:g}"
-            for value, label in ((first_value, first_label), (second_value, second_label))
-            if label is None
+            for value, matches in ((first_value, first_matches), (second_value, second_matches))
+            if not matches
         ]
         if missing:
             return _insufficient(
                 f"No plan label matching {' and '.join(missing)} was found in the extracted data."
             )
-        assert first_label is not None and second_label is not None
+        ambiguous_values = [
+            f"EL {value:g}"
+            for value, matches in ((first_value, first_matches), (second_value, second_matches))
+            if len(matches) > 1
+        ]
+        if ambiguous_values:
+            return _ambiguous(
+                first_matches + second_matches,
+                f"Multiple plan labels match {' and '.join(ambiguous_values)}.",
+            )
+        first_label, second_label = first_matches[0], second_matches[0]
         difference = abs(first_value - second_value)
         return {
             "answer": (
@@ -995,11 +1028,14 @@ def _answer_elevation_lookup(question: str, entities: list[dict[str, Any]]) -> d
         }
     if len(values) == 1:
         target = values[0]
-        label = _find_labeled_elevation(entities, target)
-        if label is None:
+        matches = _find_labeled_elevations(entities, target)
+        if not matches:
             return _insufficient(
                 f"No plan label matching 'EL {target:g}' was found in the extracted data."
             )
+        if len(matches) > 1:
+            return _ambiguous(matches, f"Multiple plan labels match 'EL {target:g}'.")
+        label = matches[0]
         location = (label.get("properties") or {}).get("location")
         located_at = (
             f"at coordinates ({location[0]:.2f}, {location[1]:.2f})"

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -351,6 +352,14 @@ def update_user(
     if payload.role is not None:
         if user.role == ROLE_ADMIN and payload.role != ROLE_ADMIN:
             _require_not_last_active_admin(database, user)
+        if payload.role == ROLE_USER:
+            # ADR-009: "a project's owner must be a power_user." Demoting a
+            # user to plain `user` while they still own an active project
+            # would leave that invariant broken -- `require_project_owner`
+            # only checks `project.owner_id == user.id`, not the owner's
+            # current role, so they'd keep archive/purge/reassign rights on
+            # it despite `user` never being allowed those "anywhere".
+            _require_no_owned_projects(database, user)
         user.role = payload.role
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
@@ -451,9 +460,9 @@ def reassign_project_owner(
         raise HTTPException(status_code=422, detail="A project owner must be a power_user")
     if new_owner.disabled_at is not None:
         raise HTTPException(status_code=422, detail="Cannot assign a disabled user as owner")
+    previous_owner_id = project.owner_id
     project.owner_id = new_owner.id
-    # The new owner's access no longer depends on a membership row; the old
-    # owner keeps theirs unless explicitly removed, same as any collaborator.
+    # The new owner's access no longer depends on a membership row.
     stale_membership = database.scalar(
         select(ProjectMembership).where(
             ProjectMembership.project_id == project.id, ProjectMembership.user_id == new_owner.id
@@ -461,6 +470,24 @@ def reassign_project_owner(
     )
     if stale_membership is not None:
         database.delete(stale_membership)
+    # The old owner keeps their access as a collaborator unless explicitly
+    # removed, same as any collaborator -- an owner never has a membership row
+    # of their own (add_project_member forbids adding the current owner as a
+    # member), so without adding one here they'd end up with neither owner_id
+    # nor a membership row and be locked out of the project entirely, the
+    # opposite of what this is meant to do. Skipped for an admin (already has
+    # universal access) or a no-op reassignment to the same user.
+    if previous_owner_id is not None and previous_owner_id != new_owner.id:
+        previous_owner = database.get(User, previous_owner_id)
+        if previous_owner is not None and previous_owner.role != ROLE_ADMIN:
+            existing_membership = database.scalar(
+                select(ProjectMembership).where(
+                    ProjectMembership.project_id == project.id,
+                    ProjectMembership.user_id == previous_owner_id,
+                )
+            )
+            if existing_membership is None:
+                database.add(ProjectMembership(project_id=project.id, user_id=previous_owner_id))
     database.commit()
     database.refresh(project)
     return project
@@ -1254,25 +1281,35 @@ SIDEWALK_TYPE_KEYWORDS = ("sidewalk", "walkway")
 DETENTION_BASIN_TYPE_KEYWORDS = ("detention", "retention", "basin")
 
 
+def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    # Word-boundary match, not a bare substring: a short bare keyword like "tree"
+    # is a literal substring of an unrelated word like "street" -- the same
+    # hazard already fixed for DIRECTION_AXES in ai_service.py's
+    # _parse_directional_question. An optional trailing "s" still matches an
+    # ordinary plural layer name ("TREES", "SIDEWALKS") without a boundary
+    # between the keyword and the "s" defeating the match entirely.
+    return any(re.search(rf"\b{re.escape(keyword)}s?\b", text) for keyword in keywords)
+
+
 def _semantic_type_from_text(text: str) -> str | None:
     lowered = text.lower()
-    if any(keyword in lowered for keyword in CURB_CUT_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, CURB_CUT_TYPE_KEYWORDS):
         return "curb_cut"
-    if any(keyword in lowered for keyword in UTILITY_EASEMENT_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, UTILITY_EASEMENT_TYPE_KEYWORDS):
         return "utility_easement"
-    if any(keyword in lowered for keyword in DETENTION_BASIN_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, DETENTION_BASIN_TYPE_KEYWORDS):
         return "detention_basin"
-    if any(keyword in lowered for keyword in PARKING_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, PARKING_TYPE_KEYWORDS):
         return "parking"
-    if any(keyword in lowered for keyword in TREE_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, TREE_TYPE_KEYWORDS):
         return "tree"
-    if any(keyword in lowered for keyword in SIDEWALK_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, SIDEWALK_TYPE_KEYWORDS):
         return "sidewalk"
-    if any(keyword in lowered for keyword in PARCEL_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, PARCEL_TYPE_KEYWORDS):
         return "parcel_boundary"
-    if any(keyword in lowered for keyword in BUILDING_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, BUILDING_TYPE_KEYWORDS):
         return "building_footprint"
-    if any(keyword in lowered for keyword in DRIVEWAY_TYPE_KEYWORDS):
+    if _contains_keyword(lowered, DRIVEWAY_TYPE_KEYWORDS):
         return "driveway_road"
     return None
 
@@ -1669,7 +1706,20 @@ def _resolve_revision_ids(
     version of a re-uploaded file never contributes alongside its replacement.
     """
     if requested:
-        return requested
+        # Scoped to this project, not returned as-is: `require_project_member`
+        # only checks membership on `project_id`, so an id belonging to a
+        # different project the caller has no relationship to would otherwise
+        # pull that project's site-model entities into this project's
+        # summary/question answer -- and persist them there. An id that
+        # doesn't belong here is silently dropped rather than erroring, the
+        # same as a stale/nonexistent id already would be.
+        return list(
+            database.scalars(
+                select(ProjectRevision.id).where(
+                    ProjectRevision.id.in_(requested), ProjectRevision.project_id == project_id
+                )
+            )
+        )
     revisions = list(
         database.scalars(select(ProjectRevision).where(ProjectRevision.project_id == project_id))
     )

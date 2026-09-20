@@ -29,7 +29,7 @@ The first release will focus on a small, end-to-end vertical slice rather than i
 - Advanced PDF vision/OCR for every plan-set layout
 - Complete Civil 3D object support
 - Full structural, stormwater, and earthwork design modules
-- Multi-user authentication and billing
+- Billing (multi-user authentication, roles, and per-project ownership shipped as Phase 15 — see section 8's roadmap item 6 and DECISIONS.md ADR-009)
 - Cloud object storage and hosted deployment
 - Production-grade embeddings/search infrastructure
 

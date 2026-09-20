@@ -179,6 +179,50 @@ def test_setback_compliance_measures_building_to_parcel_clearance(
         get_settings.cache_clear()
 
 
+def test_setback_compliance_does_not_convert_the_stated_threshold_to_a_different_unit(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test found via code review: _answer_setback_compliance used to
+    # convert only the *stated threshold* to true metres (via convert_distance)
+    # while leaving the measured `clearance` in whatever unit the project's raw
+    # coordinates actually are -- silently comparing mismatched units. A project
+    # with feet-based coordinates (the app's own default_unit_system, and every
+    # worked example in TestQuestions) and a real 20 ft clearance would have had
+    # "at least 25 ft" converted to 7.62 (true metres) and wrongly reported
+    # "compliant" (20 >= 7.62), the opposite of the correct answer.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]
+        modelspace = drawing.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (100, 0), (100, 100), (0, 100)],
+            close=True,
+            dxfattribs={"layer": "PROPERTY LINE"},
+        )
+        # Offset 20 units in from every parcel edge -> clearance is exactly 20.
+        modelspace.add_lwpolyline(
+            [(20, 20), (30, 20), (30, 30), (20, 30)],
+            close=True,
+            dxfattribs={"layer": "BUILDING FOOTPRINT"},
+        )
+        project_id, revision_id = _revision_from_dxf(
+            client, tmp_path, drawing, "setback_units.dxf", "Setback Unit Mismatch Site"
+        )
+
+        answer = _ask(client, project_id, revision_id, "Is the building's setback at least 25 ft?")
+        assert answer["answer"]["result"] == 20.0
+        # 20 < 25: not compliant. The pre-fix bug reported this as compliant by
+        # comparing the raw clearance (20) against the threshold converted to true
+        # metres (25 ft -> 7.62).
+        assert "not compliant" in answer["answer"]["answer"]
+        assert answer["answer"]["unit"] == "ft"
+    finally:
+        app.dependency_overrides.clear()
+        from civil_engineering.config import get_settings
+
+        get_settings.cache_clear()
+
+
 def test_count_question_counts_entities_classified_by_role(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
@@ -310,6 +354,45 @@ def test_elevation_lookup_finds_labeled_spot_elevations_and_their_difference(
         missing = _ask(client, project_id, revision_id, "Where is EL 999.9 located?")
         assert missing["answer"]["confidence"] == 0.0
         assert "No plan label" in missing["answer"]["limitations"][0]
+    finally:
+        app.dependency_overrides.clear()
+        from civil_engineering.config import get_settings
+
+        get_settings.cache_clear()
+
+
+def test_elevation_lookup_flags_ambiguity_instead_of_silently_picking_a_duplicate_label(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Regression test found via code review: a real plan can repeat the same
+    # rounded spot elevation at two different benchmarks (e.g. two separate "EL
+    # 100.00" callouts). _find_labeled_elevation used to silently return the
+    # first match via next(), unlike every sibling resolver added in this same
+    # phase (_answer_area/_answer_dimensions/_answer_setback_compliance etc.),
+    # which all explicitly flag more than one candidate as ambiguous rather than
+    # guessing which one the question meant.
+    client = _client(tmp_path, monkeypatch)
+    try:
+        drawing = ezdxf.new("R2010")  # type: ignore[attr-defined]
+        modelspace = drawing.modelspace()
+        modelspace.add_text("EL 100.00", dxfattribs={"layer": "ELEVATIONS", "insert": (5.0, 5.0)})
+        modelspace.add_text("EL 100.00", dxfattribs={"layer": "ELEVATIONS", "insert": (50.0, 50.0)})
+        modelspace.add_text("EL 95.00", dxfattribs={"layer": "ELEVATIONS", "insert": (0.0, 0.0)})
+        project_id, revision_id = _revision_from_dxf(
+            client, tmp_path, drawing, "duplicate_elevations.dxf", "Duplicate Elevation Site"
+        )
+
+        location = _ask(client, project_id, revision_id, "Where is EL 100.00 located?")
+        assert location["answer"]["method"] == "clarification needed"
+        assert len(location["answer"]["source_references"]) == 2
+
+        difference = _ask(
+            client,
+            project_id,
+            revision_id,
+            "What is the elevation difference between EL 100.00 and EL 95.00?",
+        )
+        assert difference["answer"]["method"] == "clarification needed"
     finally:
         app.dependency_overrides.clear()
         from civil_engineering.config import get_settings
