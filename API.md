@@ -19,11 +19,12 @@ Returns application and dependency status.
 
 ## Authentication and Users
 
-- `POST /auth/login` - log in, sets an httpOnly session cookie
+- `POST /auth/login` - log in with `{"email": ..., "password": ...}`, sets an httpOnly session cookie
 - `POST /auth/logout` - revoke the current session
 - `GET /auth/me` - the logged-in user
 - `POST /users` / `GET /users` / `PATCH /users/{user_id}` / `DELETE /users/{user_id}` - user management (admin only, scoped to the caller's own tenant — see below)
 - `GET /users/lookup?username=` - exact-username lookup, scoped to the caller's own tenant (any authenticated caller, not just admins)
+- `POST /tenants` / `GET /tenants` - create/list tenants (`platform_admin` only; PLAN.md Phase 16)
 
 Every route below requires a logged-in session, and most are further
 scoped to a role and/or project ownership/membership — see
@@ -40,9 +41,20 @@ resource outside the caller's tenant is `404`, the same don't-leak-existence
 treatment as an unauthorized project. Creating a project, client, or user
 assigns the caller's own tenant automatically; a `platform_admin` caller may
 instead name an existing tenant explicitly via `tenant_id` in the request
-body. This is enforced today with no database-level backstop yet (no
-Postgres Row-Level Security) and no way to create a *new* tenant via the
-API — see RISK_REGISTER.md.
+body, naming a tenant created via `POST /tenants` (2026-09-20 — previously
+only creatable by direct database access).
+
+Login is by `email`, not `username` (2026-09-20, PLAN.md Phase 16):
+`username` is unique only per tenant, so a bare `username` lookup can't say
+which tenant's "jsmith" is meant, while `email` is unique install-wide.
+`POST /users` requires `email` in the body alongside `username`/`password`/
+`role`; `PATCH /users/{user_id}` accepts an optional `email`. `email` is
+lowercased on write and returned on `UserResponse`. This is enforced
+app-side, plus (2026-09-20) Postgres Row-Level Security on `projects` and
+`clients` as a database-enforced backstop for the shared-instance case —
+**written but unverified against a real Postgres instance**, since this
+environment has no live Postgres available; see RISK_REGISTER.md and
+migration `0021_add_row_level_security`'s docstring.
 
 ## Clients
 

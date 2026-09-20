@@ -210,8 +210,10 @@ for the latest if it's changed since).
 ```powershell
 cd backend
 $env:SYSADMIN_INITIAL_PASSWORD = "<a real password, not the example below>"
+$env:SYSADMIN_EMAIL = "<the sysadmin's real email address>"
 uv run python scripts/create_sysadmin.py
 Remove-Item Env:SYSADMIN_INITIAL_PASSWORD
+Remove-Item Env:SYSADMIN_EMAIL
 cd ..
 ```
 
@@ -219,9 +221,13 @@ Creates the `sysadmin` account (role: Admin) used to log in and create
 the client's real user accounts, and the default tenant every
 pre-existing row is backfilled onto (Phase 16 — schema-only foundation
 for also selling this as a vendor-hosted service; nothing about a
-single client's own install changes because of it). `SYSADMIN_INITIAL_PASSWORD`
-is a one-shot shell variable, never written to `.env` or any file —
-unset it immediately after, as shown above.
+single client's own install changes because of it). Both
+`SYSADMIN_INITIAL_PASSWORD` and `SYSADMIN_EMAIL` are required — login is by
+email, not username (Phase 16, 2026-09-20), so a sysadmin without one
+can't log in. Both are one-shot shell variables, never written to `.env`
+or any file — unset them immediately after, as shown above. Re-running
+this script against an existing sysadmin that predates `SYSADMIN_EMAIL`
+backfills its email instead of erroring.
 
 ### 6. Build and start
 

@@ -305,13 +305,19 @@ class PurgeHistoryEntry(Base):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("tenant_id", "username", name="uq_users_tenant_username"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    # Globally unique today. A shared instance serving several tenants will
-    # need this scoped to (tenant_id, username) instead -- deliberately not
-    # changed yet, since tenant_id isn't enforced anywhere (see Tenant's
-    # docstring); tracked as a Phase 16 follow-up, not done here.
-    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # Unique per tenant, not globally (PLAN.md Phase 16): two different
+    # tenants can each have their own "jsmith". Login uses `email` instead
+    # (below), which stays globally unique, precisely so a login attempt is
+    # never ambiguous about which tenant's same-named user is meant.
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Nullable at the DB level even though every new user must have one
+    # (enforced in schemas.py's UserCreate, not here): existing rows predate
+    # this column and have no email to backfill onto. Globally unique --
+    # this is the login identifier, not username (see above).
+    email: Mapped[str | None] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     # platform_admin | admin | power_user | user -- validated in schemas.py,
     # not a DB enum, matching this codebase's existing string-status-field

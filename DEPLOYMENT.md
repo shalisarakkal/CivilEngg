@@ -62,10 +62,17 @@ a no-op if `sysadmin` already exists:
 ```powershell
 cd backend
 $env:SYSADMIN_INITIAL_PASSWORD = "<a real password, not the example below>"
+$env:SYSADMIN_EMAIL = "<the sysadmin's real email address>"
 uv run python scripts/create_sysadmin.py
 Remove-Item Env:SYSADMIN_INITIAL_PASSWORD
+Remove-Item Env:SYSADMIN_EMAIL
 cd ..
 ```
+
+`SYSADMIN_EMAIL` is required alongside `SYSADMIN_INITIAL_PASSWORD`
+(Phase 16, 2026-09-20) — login is by email, not username, so a sysadmin
+without one can't log in. Re-running against a pre-existing sysadmin that
+predates this backfills its email instead of erroring.
 
 This also backfills any project that predates Phase 15 (no owner) onto
 the new `sysadmin` account — reassign real ownership to a Power User
@@ -89,8 +96,8 @@ dedicated instance.
 - Point `LOCAL_STORAGE_PATH` at a durable location you intend to back up
   (see section 6); it defaults to `./storage` relative to wherever the
   backend process starts.
-- `SYSADMIN_INITIAL_PASSWORD` is not a `.env` setting — it's only ever
-  passed as a one-shot shell environment variable to
+- `SYSADMIN_INITIAL_PASSWORD` and `SYSADMIN_EMAIL` are not `.env` settings
+  — they're only ever passed as one-shot shell environment variables to
   `create_sysadmin.py` (section 3) and unset immediately after, never
   written to a file.
 - There are no other secrets today: the AI provider is a deterministic

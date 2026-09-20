@@ -14,8 +14,9 @@ import { request } from "@playwright/test";
  * (create/own/archive/purge a project) without granting more than that.
  */
 
-// Keep in sync with backend/scripts/e2e_bootstrap.py's E2E_PASSWORD.
+// Keep in sync with backend/scripts/e2e_bootstrap.py's E2E_PASSWORD/E2E_ACCOUNTS.
 const E2E_PASSWORD = "e2e-fixed-password-1";
+const E2E_EMAIL = "e2e-power-user@example.com";
 const API_URL = "http://localhost:8000";
 
 export const AUTH_DIR = path.join(__dirname, "playwright", ".auth");
@@ -25,7 +26,7 @@ export default async function globalSetup(): Promise<void> {
   const context = await request.newContext({ baseURL: API_URL });
   try {
     const response = await context.post("/auth/login", {
-      data: { username: "e2e-power-user", password: E2E_PASSWORD },
+      data: { email: E2E_EMAIL, password: E2E_PASSWORD },
     });
     if (!response.ok()) {
       throw new Error(

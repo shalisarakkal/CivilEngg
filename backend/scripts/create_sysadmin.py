@@ -8,6 +8,9 @@ tenant already exist.
 The initial password is read from the SYSADMIN_INITIAL_PASSWORD environment
 variable -- never a CLI argument (visible in shell history/process lists) and
 never hardcoded, matching this project's "no secrets in git" discipline.
+SYSADMIN_EMAIL is required alongside it: login is by email, not username
+(PLAN.md Phase 16 -- username is only unique per tenant, so it can no longer
+say by itself which tenant's user is meant).
 
 The default tenant (DECISIONS.md ADR-010, PLAN.md Phase 16) is what makes a
 dedicated single-customer install a valid, if trivial, case of the same
@@ -17,7 +20,7 @@ existed. Nothing yet reads or enforces tenant_id on any query -- this script
 only establishes the row, it doesn't turn on isolation.
 
 Usage:
-    SYSADMIN_INITIAL_PASSWORD=... uv run python scripts/create_sysadmin.py
+    SYSADMIN_INITIAL_PASSWORD=... SYSADMIN_EMAIL=... uv run python scripts/create_sysadmin.py
 """
 
 import os
@@ -38,14 +41,17 @@ DEFAULT_TENANT_NAME = "Default"
 
 def main() -> None:
     password = os.environ.get("SYSADMIN_INITIAL_PASSWORD")
-    if not password:
+    email = os.environ.get("SYSADMIN_EMAIL")
+    if not password or not email:
         print(
-            "SYSADMIN_INITIAL_PASSWORD is not set. Set it to the sysadmin account's initial "
-            "password and re-run, e.g.:\n"
-            "  SYSADMIN_INITIAL_PASSWORD=... uv run python scripts/create_sysadmin.py",
+            "SYSADMIN_INITIAL_PASSWORD and SYSADMIN_EMAIL must both be set. Set them to the "
+            "sysadmin account's initial password and login email, then re-run, e.g.:\n"
+            "  SYSADMIN_INITIAL_PASSWORD=... SYSADMIN_EMAIL=... "
+            "uv run python scripts/create_sysadmin.py",
             file=sys.stderr,
         )
         raise SystemExit(1)
+    email = email.lower()
 
     database = SessionLocal()
     try:
@@ -55,13 +61,24 @@ def main() -> None:
         if sysadmin is None:
             sysadmin = User(
                 username=SYSADMIN_USERNAME,
+                email=email,
                 password_hash=hash_password(password),
                 role=ROLE_ADMIN,
             )
             database.add(sysadmin)
             database.commit()
             database.refresh(sysadmin)
-            print(f"Created '{SYSADMIN_USERNAME}' (admin).")
+            print(f"Created '{SYSADMIN_USERNAME}' (admin, {email}).")
+        elif sysadmin.email is None:
+            # Re-run after upgrading from a pre-email install: backfill it,
+            # since login now requires one and this account would otherwise
+            # be permanently locked out.
+            sysadmin.email = email
+            database.commit()
+            print(
+                f"Backfilled '{SYSADMIN_USERNAME}'s email ({email}); "
+                "leaving it unchanged otherwise."
+            )
         else:
             print(f"'{SYSADMIN_USERNAME}' already exists; leaving it unchanged.")
 

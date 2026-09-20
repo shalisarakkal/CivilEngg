@@ -55,8 +55,13 @@ def _seed_user(
 ) -> str:
     database = sessions()
     try:
+        # Login is by email now, not username (PLAN.md Phase 16) -- derived
+        # from username here purely so every existing call site (already
+        # globally-unique usernames, from before this change) keeps working
+        # without also having to name an email everywhere.
         user = User(
             username=username,
+            email=f"{username}@example.com",
             password_hash=hash_password(password),
             role=role,
             disabled_at=datetime.now(timezone.utc) if disabled else None,
@@ -75,7 +80,9 @@ def test_login_sets_cookie_and_me_returns_the_user(
     client, sessions = _make_client(tmp_path, monkeypatch)
     try:
         _seed_user(sessions, username="alice", role=ROLE_ADMIN, password="secret123")
-        login = client.post("/auth/login", json={"username": "alice", "password": "secret123"})
+        login = client.post(
+            "/auth/login", json={"email": "alice@example.com", "password": "secret123"}
+        )
         assert login.status_code == 200
         assert "session_id" in login.cookies
         me = client.get("/auth/me")
@@ -90,7 +97,7 @@ def test_login_wrong_password_is_rejected(tmp_path: Path, monkeypatch: MonkeyPat
     client, sessions = _make_client(tmp_path, monkeypatch)
     try:
         _seed_user(sessions, username="bob", role=ROLE_USER, password="correct-password")
-        login = client.post("/auth/login", json={"username": "bob", "password": "wrong"})
+        login = client.post("/auth/login", json={"email": "bob@example.com", "password": "wrong"})
         assert login.status_code == 401
     finally:
         app.dependency_overrides.clear()
@@ -100,7 +107,9 @@ def test_disabled_user_cannot_login(tmp_path: Path, monkeypatch: MonkeyPatch) ->
     client, sessions = _make_client(tmp_path, monkeypatch)
     try:
         _seed_user(sessions, username="carol", role=ROLE_USER, password="secret123", disabled=True)
-        login = client.post("/auth/login", json={"username": "carol", "password": "secret123"})
+        login = client.post(
+            "/auth/login", json={"email": "carol@example.com", "password": "secret123"}
+        )
         assert login.status_code == 401
     finally:
         app.dependency_overrides.clear()
@@ -110,7 +119,7 @@ def test_logout_then_me_is_unauthenticated(tmp_path: Path, monkeypatch: MonkeyPa
     client, sessions = _make_client(tmp_path, monkeypatch)
     try:
         _seed_user(sessions, username="dave", role=ROLE_ADMIN, password="secret123")
-        client.post("/auth/login", json={"username": "dave", "password": "secret123"})
+        client.post("/auth/login", json={"email": "dave@example.com", "password": "secret123"})
         assert client.post("/auth/logout").status_code == 204
         assert client.get("/auth/me").status_code == 401
     finally:
@@ -124,12 +133,14 @@ def test_disabling_takes_effect_on_next_request_not_the_open_session(
     try:
         admin_id = _seed_user(sessions, username="admin", role=ROLE_ADMIN, password="secret123")
         target_id = _seed_user(sessions, username="target", role=ROLE_USER, password="secret123")
-        client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin@example.com", "password": "secret123"})
         assert client.get("/auth/me").status_code == 200
 
         # A second client holds the disabled user's own session.
         target_client, _ = (client.__class__(app), sessions)
-        target_client.post("/auth/login", json={"username": "target", "password": "secret123"})
+        target_client.post(
+            "/auth/login", json={"email": "target@example.com", "password": "secret123"}
+        )
         assert target_client.get("/auth/me").status_code == 200
 
         disable = client.patch(f"/users/{target_id}", json={"disabled": True})
@@ -148,7 +159,9 @@ def test_cannot_disable_the_last_active_admin(tmp_path: Path, monkeypatch: Monke
         admin_id = _seed_user(
             sessions, username="only-admin", role=ROLE_ADMIN, password="secret123"
         )
-        client.post("/auth/login", json={"username": "only-admin", "password": "secret123"})
+        client.post(
+            "/auth/login", json={"email": "only-admin@example.com", "password": "secret123"}
+        )
         response = client.patch(f"/users/{admin_id}", json={"disabled": True})
         assert response.status_code == 409
     finally:
@@ -163,7 +176,7 @@ def test_power_user_creates_project_and_becomes_owner(
         power_user_id = _seed_user(
             sessions, username="pu", role=ROLE_POWER_USER, password="secret123"
         )
-        client.post("/auth/login", json={"username": "pu", "password": "secret123"})
+        client.post("/auth/login", json={"email": "pu@example.com", "password": "secret123"})
         created = client.post("/projects", json={"name": "Oak Street Site"})
         assert created.status_code == 201
         assert created.json()["owner_id"] == power_user_id
@@ -175,7 +188,7 @@ def test_plain_user_role_cannot_create_a_project(tmp_path: Path, monkeypatch: Mo
     client, sessions = _make_client(tmp_path, monkeypatch)
     try:
         _seed_user(sessions, username="viewer", role=ROLE_USER, password="secret123")
-        client.post("/auth/login", json={"username": "viewer", "password": "secret123"})
+        client.post("/auth/login", json={"email": "viewer@example.com", "password": "secret123"})
         response = client.post("/projects", json={"name": "Should Fail"})
         assert response.status_code == 403
     finally:
@@ -190,11 +203,11 @@ def test_non_member_gets_404_not_403_on_someone_elses_project(
         _seed_user(sessions, username="owner", role=ROLE_POWER_USER, password="secret123")
         _seed_user(sessions, username="outsider", role=ROLE_POWER_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner@example.com", "password": "secret123"})
         project_id = client.post("/projects", json={"name": "Private Site"}).json()["id"]
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "outsider", "password": "secret123"})
+        client.post("/auth/login", json={"email": "outsider@example.com", "password": "secret123"})
         response = client.get(f"/projects/{project_id}")
         assert response.status_code == 404
     finally:
@@ -209,13 +222,13 @@ def test_plain_user_member_can_upload_but_not_archive(
         _seed_user(sessions, username="owner2", role=ROLE_POWER_USER, password="secret123")
         member_id = _seed_user(sessions, username="member", role=ROLE_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner2", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner2@example.com", "password": "secret123"})
         project_id = client.post("/projects", json={"name": "Shared Site"}).json()["id"]
         added = client.post(f"/projects/{project_id}/members", json={"user_id": member_id})
         assert added.status_code == 201
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "member", "password": "secret123"})
+        client.post("/auth/login", json={"email": "member@example.com", "password": "secret123"})
         assert client.get(f"/projects/{project_id}").status_code == 200
         upload = client.post(
             f"/projects/{project_id}/files",
@@ -238,12 +251,14 @@ def test_non_owner_power_user_member_cannot_archive_the_project(
             sessions, username="collaborator", role=ROLE_POWER_USER, password="secret123"
         )
 
-        client.post("/auth/login", json={"username": "owner3", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner3@example.com", "password": "secret123"})
         project_id = client.post("/projects", json={"name": "Co-owned Site"}).json()["id"]
         client.post(f"/projects/{project_id}/members", json={"user_id": collaborator_id})
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "collaborator", "password": "secret123"})
+        client.post(
+            "/auth/login", json={"email": "collaborator@example.com", "password": "secret123"}
+        )
         # A collaborator has full working capabilities...
         assert client.get(f"/projects/{project_id}").status_code == 200
         # ...but project archive/delete stays owner-only.
@@ -260,7 +275,7 @@ def test_owner_reassignment_must_target_a_power_user(
         _seed_user(sessions, username="owner4", role=ROLE_POWER_USER, password="secret123")
         plain_user_id = _seed_user(sessions, username="plain", role=ROLE_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner4", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner4@example.com", "password": "secret123"})
         project_id = client.post("/projects", json={"name": "Reassign Me"}).json()["id"]
         response = client.patch(f"/projects/{project_id}/owner", json={"owner_id": plain_user_id})
         assert response.status_code == 422
@@ -278,11 +293,11 @@ def test_cannot_disable_a_user_who_still_owns_a_project(
             sessions, username="owner5", role=ROLE_POWER_USER, password="secret123"
         )
 
-        client.post("/auth/login", json={"username": "owner5", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner5@example.com", "password": "secret123"})
         client.post("/projects", json={"name": "Owned Site"})
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "admin2", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin2@example.com", "password": "secret123"})
         response = client.patch(f"/users/{owner_id}", json={"disabled": True})
         assert response.status_code == 422
         assert admin_id
@@ -298,11 +313,11 @@ def test_admin_can_access_any_project_without_membership(
         _seed_user(sessions, username="owner6", role=ROLE_POWER_USER, password="secret123")
         _seed_user(sessions, username="admin3", role=ROLE_ADMIN, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner6", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner6@example.com", "password": "secret123"})
         project_id = client.post("/projects", json={"name": "Admin Visible Site"}).json()["id"]
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "admin3", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin3@example.com", "password": "secret123"})
         assert client.get(f"/projects/{project_id}").status_code == 200
         assert client.post(f"/projects/{project_id}/archive").status_code == 200
     finally:
@@ -317,7 +332,7 @@ def test_non_admin_can_look_up_a_username_but_not_list_all_users(
         _seed_user(sessions, username="findme", role=ROLE_POWER_USER, password="secret123")
         _seed_user(sessions, username="searcher", role=ROLE_POWER_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "searcher", "password": "secret123"})
+        client.post("/auth/login", json={"email": "searcher@example.com", "password": "secret123"})
         found = client.get("/users/lookup", params={"username": "findme"})
         assert found.status_code == 200
         assert found.json()["username"] == "findme"
@@ -345,7 +360,7 @@ def test_revision_ids_are_scoped_to_the_requesting_project(
         _seed_user(sessions, username="owner_b", role=ROLE_POWER_USER, password="secret123")
         _seed_user(sessions, username="owner_a", role=ROLE_POWER_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner_b", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_b@example.com", "password": "secret123"})
         project_b = client.post("/projects", json={"name": "Confidential Site B"}).json()
         uploaded = client.post(
             f"/projects/{project_b['id']}/files",
@@ -357,7 +372,7 @@ def test_revision_ids_are_scoped_to_the_requesting_project(
         ).json()
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "owner_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_a@example.com", "password": "secret123"})
         project_a = client.post("/projects", json={"name": "Site A"}).json()
 
         # owner_a is a member of Project A only, and names Project B's revision.
@@ -399,18 +414,18 @@ def test_demoting_a_project_owner_to_user_role_is_blocked(
             sessions, username="owner", role=ROLE_POWER_USER, password="secret123"
         )
 
-        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner@example.com", "password": "secret123"})
         project = client.post("/projects", json={"name": "Owned Site"}).json()
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin@example.com", "password": "secret123"})
         demote = client.patch(f"/users/{owner_id}", json={"role": "user"})
         assert demote.status_code == 422
         client.post("/auth/logout")
 
         # The demotion never took effect -- the owner keeps their power_user
         # role and their project's owner-level rights, unaffected either way.
-        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner@example.com", "password": "secret123"})
         assert client.post(f"/projects/{project['id']}/archive").status_code == 200
     finally:
         app.dependency_overrides.clear()
@@ -435,7 +450,9 @@ def test_reassigning_ownership_does_not_lock_out_the_previous_owner(
         )
         _seed_user(sessions, username="previous_owner", role=ROLE_POWER_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "previous_owner", "password": "secret123"})
+        client.post(
+            "/auth/login", json={"email": "previous_owner@example.com", "password": "secret123"}
+        )
         project = client.post("/projects", json={"name": "Handoff Site"}).json()
         reassign = client.patch(f"/projects/{project['id']}/owner", json={"owner_id": new_owner_id})
         assert reassign.status_code == 200
@@ -443,7 +460,9 @@ def test_reassigning_ownership_does_not_lock_out_the_previous_owner(
 
         # The previous owner should still be able to see and work on the
         # project as a collaborator, not be locked out of it entirely.
-        client.post("/auth/login", json={"username": "previous_owner", "password": "secret123"})
+        client.post(
+            "/auth/login", json={"email": "previous_owner@example.com", "password": "secret123"}
+        )
         assert client.get(f"/projects/{project['id']}").status_code == 200
         members = client.get(f"/projects/{project['id']}/members").json()
         assert any(member["username"] == "previous_owner" for member in members)
@@ -463,11 +482,11 @@ def test_platform_admin_is_a_superset_of_admin(tmp_path: Path, monkeypatch: Monk
         _seed_user(sessions, username="platform", role=ROLE_PLATFORM_ADMIN, password="secret123")
         _seed_user(sessions, username="owner", role=ROLE_POWER_USER, password="secret123")
 
-        client.post("/auth/login", json={"username": "owner", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner@example.com", "password": "secret123"})
         project = client.post("/projects", json={"name": "Owner's Site"}).json()
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        client.post("/auth/login", json={"email": "platform@example.com", "password": "secret123"})
         # Not a member of the project at all -- still fully visible/actionable.
         assert client.get(f"/projects/{project['id']}").status_code == 200
         assert project["id"] in [p["id"] for p in client.get("/projects").json()]
@@ -475,7 +494,13 @@ def test_platform_admin_is_a_superset_of_admin(tmp_path: Path, monkeypatch: Monk
         # require_admin-gated routes.
         assert client.get("/users").status_code == 200
         created = client.post(
-            "/users", json={"username": "new_user", "password": "secret123", "role": "user"}
+            "/users",
+            json={
+                "username": "new_user",
+                "email": "new_user@example.com",
+                "password": "secret123",
+                "role": "user",
+            },
         )
         assert created.status_code == 201
     finally:
@@ -496,12 +521,12 @@ def test_last_active_admin_protection_spans_both_admin_tier_roles(
             sessions, username="platform", role=ROLE_PLATFORM_ADMIN, password="secret123"
         )
 
-        client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin@example.com", "password": "secret123"})
         # A platform_admin exists, so disabling the only plain admin is fine.
         assert client.patch(f"/users/{admin_id}", json={"disabled": True}).status_code == 200
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        client.post("/auth/login", json={"email": "platform@example.com", "password": "secret123"})
         # Re-enable admin, then confirm platform_admin itself is protected:
         # no other admin-tier account remains once admin is plain-disabled
         # again, so demoting/disabling the last platform_admin is blocked.

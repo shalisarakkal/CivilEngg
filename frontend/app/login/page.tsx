@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { apiUrl } from "../api";
 
 export default function LoginPage() {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,12 +21,12 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, password }),
       });
       if (response.ok) {
         router.replace("/");
       } else {
-        setError("Invalid username or password.");
+        setError("Invalid email or password.");
       }
     } catch {
       setError("Could not reach the server.");
@@ -40,13 +40,14 @@ export default function LoginPage() {
       <p className="eyebrow">Civil Engineering Intelligence</p>
       <h1 style={{ marginBottom: 32 }}>Sign in</h1>
       <form onSubmit={handleSubmit} className="create-form">
-        <label htmlFor="login-username">Username</label>
+        <label htmlFor="login-email">Email</label>
         <div className="input-row">
           <input
-            id="login-username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            autoComplete="username"
+            id="login-email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            autoComplete="email"
             required
           />
         </div>

@@ -1,6 +1,27 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+
+def _lowercase_email(value: str) -> str:
+    # Email addresses are conventionally treated case-insensitively; without
+    # this, "Test@Example.com" and "test@example.com" would be two different
+    # rows against the globally-unique email column, and a login typed in a
+    # different case than registration would fail to match.
+    return value.lower()
+
+
+class TenantCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class TenantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class ClientCreate(BaseModel):
@@ -221,18 +242,26 @@ ROLE_PATTERN = "^(platform_admin|admin|power_user|user)$"
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
+    # Not username: two different tenants can each have their own "jsmith"
+    # (PLAN.md Phase 16), so username alone can't say which one is meant.
+    # email stays globally unique for exactly this reason.
+    email: EmailStr
     password: str = Field(min_length=1)
+
+    _lowercase = field_validator("email")(_lowercase_email)
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=1, max_length=64)
+    email: EmailStr
     password: str = Field(min_length=8)
     role: str = Field(default="user", pattern=ROLE_PATTERN)
     # Only meaningful when the caller is a platform_admin (must name an
     # existing tenant); ignored otherwise, since every other caller's new
     # user always belongs to their own tenant. See create_user in routes.py.
     tenant_id: str | None = None
+
+    _lowercase = field_validator("email")(_lowercase_email)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -242,8 +271,14 @@ class PasswordChangeRequest(BaseModel):
 
 class UserUpdate(BaseModel):
     role: str | None = Field(default=None, pattern=ROLE_PATTERN)
+    email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=8)
     disabled: bool | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _lowercase_email_if_set(cls, value: str | None) -> str | None:
+        return _lowercase_email(value) if value is not None else None
 
 
 class UserResponse(BaseModel):
@@ -251,6 +286,7 @@ class UserResponse(BaseModel):
 
     id: str
     username: str
+    email: str | None
     role: str
     tenant_id: str | None
     created_at: datetime

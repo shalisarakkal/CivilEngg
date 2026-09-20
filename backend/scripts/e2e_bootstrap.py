@@ -24,23 +24,28 @@ from civil_engineering.config import get_settings
 from civil_engineering.database import Base, SessionLocal, engine
 from civil_engineering.models import User
 
-# Keep in sync with frontend/global-setup.ts's E2E_PASSWORD.
+# Keep in sync with frontend/global-setup.ts's E2E_PASSWORD/E2E_EMAIL.
 E2E_PASSWORD = "e2e-fixed-password-1"
 E2E_ACCOUNTS = (
-    ("e2e-admin", ROLE_ADMIN),
-    ("e2e-power-user", ROLE_POWER_USER),
-    ("e2e-user", ROLE_USER),
+    ("e2e-admin", "e2e-admin@example.com", ROLE_ADMIN),
+    ("e2e-power-user", "e2e-power-user@example.com", ROLE_POWER_USER),
+    ("e2e-user", "e2e-user@example.com", ROLE_USER),
 )
 
 
 def seed_accounts() -> None:
     database = SessionLocal()
     try:
-        for username, role in E2E_ACCOUNTS:
+        for username, email, role in E2E_ACCOUNTS:
             if database.query(User).filter(User.username == username).first() is not None:
                 continue
             database.add(
-                User(username=username, password_hash=hash_password(E2E_PASSWORD), role=role)
+                User(
+                    username=username,
+                    email=email,
+                    password_hash=hash_password(E2E_PASSWORD),
+                    role=role,
+                )
             )
         database.commit()
     finally:

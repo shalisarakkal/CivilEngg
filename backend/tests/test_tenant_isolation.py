@@ -69,8 +69,16 @@ def _seed_user(
 ) -> str:
     database = sessions()
     try:
+        # Login is by email now, not username (PLAN.md Phase 16) -- derived
+        # from username here purely so every existing call site (already
+        # unique usernames per test's own isolated database) keeps working
+        # without also having to name an email everywhere.
         user = User(
-            username=username, password_hash=hash_password(password), role=role, tenant_id=tenant_id
+            username=username,
+            email=f"{username}@example.com",
+            password_hash=hash_password(password),
+            role=role,
+            tenant_id=tenant_id,
         )
         database.add(user)
         database.commit()
@@ -90,12 +98,12 @@ def test_project_visibility_and_access_are_scoped_to_tenant(
         _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
         _seed_user(sessions, username="owner_b", role=ROLE_POWER_USER, tenant_id=tenant_b)
 
-        client.post("/auth/login", json={"username": "owner_b", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_b@example.com", "password": "secret123"})
         project_b = client.post("/projects", json={"name": "Beta's Confidential Site"}).json()
         assert project_b["tenant_id"] == tenant_b
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "admin_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
         # admin is now tenant-scoped: sees nothing from tenant B, even though
         # admin used to see every project in the whole install.
         assert client.get("/projects").json() == []
@@ -114,15 +122,15 @@ def test_platform_admin_crosses_tenant_boundaries(tmp_path: Path, monkeypatch: M
         _seed_user(sessions, username="owner_b", role=ROLE_POWER_USER, tenant_id=tenant_b)
         _seed_user(sessions, username="platform", role=ROLE_PLATFORM_ADMIN, tenant_id=None)
 
-        client.post("/auth/login", json={"username": "owner_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_a@example.com", "password": "secret123"})
         project_a = client.post("/projects", json={"name": "Acme Site"}).json()
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "owner_b", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_b@example.com", "password": "secret123"})
         project_b = client.post("/projects", json={"name": "Beta Site"}).json()
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        client.post("/auth/login", json={"email": "platform@example.com", "password": "secret123"})
         visible_ids = {p["id"] for p in client.get("/projects").json()}
         assert {project_a["id"], project_b["id"]} <= visible_ids
         assert client.get(f"/projects/{project_a['id']}").status_code == 200
@@ -141,12 +149,12 @@ def test_client_visibility_and_access_are_scoped_to_tenant(
         _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
         _seed_user(sessions, username="admin_b", role=ROLE_ADMIN, tenant_id=tenant_b)
 
-        client.post("/auth/login", json={"username": "admin_b", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_b@example.com", "password": "secret123"})
         client_b = client.post("/clients", json={"name": "Beta's City Client"}).json()
         assert client_b["tenant_id"] == tenant_b
         client.post("/auth/logout")
 
-        client.post("/auth/login", json={"username": "admin_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
         assert client.get("/clients").json() == []
         assert client.get(f"/clients/{client_b['id']}").status_code == 404
         assert client.patch(f"/clients/{client_b['id']}", json={"name": "x"}).status_code == 404
@@ -166,7 +174,7 @@ def test_admin_user_management_is_scoped_to_tenant(
             sessions, username="user_b", role=ROLE_POWER_USER, tenant_id=tenant_b
         )
 
-        client.post("/auth/login", json={"username": "admin_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
         usernames = {u["username"] for u in client.get("/users").json()}
         assert usernames == {"admin_a"}
         assert client.get("/users/lookup?username=user_b").status_code == 404
@@ -184,9 +192,15 @@ def test_new_user_is_assigned_the_creating_admins_tenant(
         tenant_a = _seed_tenant(sessions, name="Acme Engineering")
         _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
 
-        client.post("/auth/login", json={"username": "admin_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
         created = client.post(
-            "/users", json={"username": "new_hire", "password": "secret123", "role": "user"}
+            "/users",
+            json={
+                "username": "new_hire",
+                "email": "new_hire@example.com",
+                "password": "secret123",
+                "role": "user",
+            },
         ).json()
         assert created["tenant_id"] == tenant_a
     finally:
@@ -205,7 +219,7 @@ def test_cannot_add_a_cross_tenant_collaborator_or_reassign_to_a_cross_tenant_ow
             sessions, username="outsider", role=ROLE_POWER_USER, tenant_id=tenant_b
         )
 
-        client.post("/auth/login", json={"username": "owner_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "owner_a@example.com", "password": "secret123"})
         project_a = client.post("/projects", json={"name": "Acme Site"}).json()
 
         add_member = client.post(
@@ -232,7 +246,7 @@ def test_platform_admin_provisions_a_project_in_an_explicit_tenant(
         )
         _seed_user(sessions, username="platform", role=ROLE_PLATFORM_ADMIN, tenant_id=None)
 
-        client.post("/auth/login", json={"username": "platform", "password": "secret123"})
+        client.post("/auth/login", json={"email": "platform@example.com", "password": "secret123"})
         missing_tenant = client.post(
             "/projects", json={"name": "Acme Site", "owner_id": owner_a_id}
         )
@@ -261,8 +275,119 @@ def test_last_active_admin_protection_no_longer_crosses_tenants(
         admin_a_id = _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
         _seed_user(sessions, username="admin_b", role=ROLE_ADMIN, tenant_id=tenant_b)
 
-        client.post("/auth/login", json={"username": "admin_a", "password": "secret123"})
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
         response = client.patch(f"/users/{admin_a_id}", json={"disabled": True})
         assert response.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_platform_admin_provisions_a_new_tenant_end_to_end(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # The full provisioning flow: platform_admin creates a Tenant, then an
+    # admin account inside it via POST /users (tenant_id already supported
+    # there from the query-scoping slice) -- no separate "create tenant +
+    # first admin" endpoint needed since the two already compose.
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        _seed_user(sessions, username="platform", role=ROLE_PLATFORM_ADMIN, tenant_id=None)
+
+        client.post("/auth/login", json={"email": "platform@example.com", "password": "secret123"})
+        tenant = client.post("/tenants", json={"name": "New Customer LLC"})
+        assert tenant.status_code == 201
+        tenant_id = tenant.json()["id"]
+
+        assert {t["name"] for t in client.get("/tenants").json()} == {"New Customer LLC"}
+
+        first_admin = client.post(
+            "/users",
+            json={
+                "username": "new_customer_admin",
+                "email": "new_customer_admin@example.com",
+                "password": "secret123",
+                "role": "admin",
+                "tenant_id": tenant_id,
+            },
+        )
+        assert first_admin.status_code == 201
+        assert first_admin.json()["tenant_id"] == tenant_id
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_only_platform_admin_can_manage_tenants(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        tenant_a = _seed_tenant(sessions, name="Acme Engineering")
+        _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
+
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
+        assert client.post("/tenants", json={"name": "Sneaky Co"}).status_code == 403
+        assert client.get("/tenants").status_code == 403
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_two_tenants_can_share_a_username_but_not_an_email(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # The actual problem this slice closes: username is unique per tenant,
+    # not globally (PLAN.md Phase 16) -- two different customers can each
+    # have their own "jsmith". Login uses email instead, which stays
+    # globally unique, so a login attempt is never ambiguous about which
+    # tenant's "jsmith" is meant.
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        tenant_a = _seed_tenant(sessions, name="Acme Engineering")
+        tenant_b = _seed_tenant(sessions, name="Beta Engineering")
+        _seed_user(sessions, username="admin_a", role=ROLE_ADMIN, tenant_id=tenant_a)
+        _seed_user(sessions, username="admin_b", role=ROLE_ADMIN, tenant_id=tenant_b)
+
+        client.post("/auth/login", json={"email": "admin_a@example.com", "password": "secret123"})
+        first = client.post(
+            "/users",
+            json={
+                "username": "jsmith",
+                "email": "jsmith@acme.example.com",
+                "password": "secret123",
+                "role": "user",
+            },
+        )
+        assert first.status_code == 201
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"email": "admin_b@example.com", "password": "secret123"})
+        # Same username, different tenant, different email -- allowed.
+        second = client.post(
+            "/users",
+            json={
+                "username": "jsmith",
+                "email": "jsmith@beta.example.com",
+                "password": "secret123",
+                "role": "user",
+            },
+        )
+        assert second.status_code == 201
+
+        # The SAME email, even in a different tenant, is still rejected.
+        duplicate_email = client.post(
+            "/users",
+            json={
+                "username": "someone_else",
+                "email": "jsmith@acme.example.com",
+                "password": "secret123",
+                "role": "user",
+            },
+        )
+        assert duplicate_email.status_code == 409
+
+        # Logging in as tenant A's "jsmith" only ever resolves that one
+        # account, unambiguously, via email.
+        login = client.post(
+            "/auth/login", json={"email": "jsmith@acme.example.com", "password": "secret123"}
+        )
+        assert login.status_code == 200
+        assert login.json()["tenant_id"] == tenant_a
     finally:
         app.dependency_overrides.clear()

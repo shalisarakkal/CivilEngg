@@ -695,20 +695,63 @@ than three different data models.
     two tenants at once, verified as real (not vacuous) by reverting the
     core tenant check and confirming a failure before restoring it.
 
+- [x] Email as the login identifier, and `username` uniqueness moved from
+  global to per-`(tenant_id, username)` (2026-09-20, migration
+  `0020_add_user_email_tenant_scoped_username`): relaxing `username`
+  uniqueness alone would make login ambiguous — nothing said which tenant's
+  "jsmith" was meant. `User.email` is a new globally-unique, nullable
+  (pre-existing rows), lowercased column; `LoginRequest` now takes `email`
+  instead of `username`; `UserCreate`/`UserUpdate` require/accept `email`
+  and check it for uniqueness install-wide while `username` is checked only
+  within the target tenant. `create_sysadmin.py` requires a new
+  `SYSADMIN_EMAIL` env var (backfills email onto a pre-existing emailless
+  sysadmin on a second run). Frontend login form and the admin user-management
+  page updated to collect/display email. Verified via reproduce-first:
+  reverted to the old single-column unique `username`, confirmed
+  `test_two_tenants_can_share_a_username_but_not_an_email` failed with a
+  UNIQUE constraint error, restored the fix.
+- [x] Postgres Row-Level Security as a database-enforced backstop for the
+  shared-instance case (2026-09-20, migration `0021_add_row_level_security`)
+  — **written but UNVERIFIED against a real Postgres instance**, since this
+  environment has no live Postgres to run any migration against (not just
+  this one — confirmed migration `0001`'s `CREATE EXTENSION postgis` also
+  can't run here). Enables `FORCE ROW LEVEL SECURITY` (not just `ENABLE` —
+  Postgres exempts a table's owner by default, which this app's role
+  normally is) plus a `tenant_isolation` policy on `projects` and `clients`
+  only, reading `app.current_tenant_id`/`app.is_platform_admin` session
+  variables that `auth.py`'s `get_current_user` and a `database.py` Session
+  `after_begin` listener set on every transaction (`SET LOCAL` only lasts
+  one transaction, and many routes call `database.commit()` more than once
+  per request). Deliberately excludes `users` (the account lookup that
+  determines the tenant context happens before that context exists — a
+  bootstrapping problem the app-layer checks don't have) and every table
+  nested under `Project` (source_files, processing_jobs, site_model_entities,
+  etc.) — both documented as explicit scope limits in the migration's
+  docstring, not oversights. Unit tests
+  (`backend/tests/test_row_level_security.py`) cover the session-variable
+  logic in isolation against a fake connection; they do not and cannot
+  confirm Postgres actually accepts/enforces the policies. **Must be
+  verified against a real Postgres instance before any shared-instance
+  deployment relies on it.**
+- [x] A tenant provisioning API (2026-09-20): `POST /tenants` and
+  `GET /tenants`, both `platform_admin`-only (`require_platform_admin`,
+  previously unused plumbing from the role-split slice). A platform_admin
+  can now create a real `Tenant` row through the API rather than needing
+  direct database access, then target it via the existing `tenant_id`
+  field on `POST /projects`/`POST /clients`/`POST /users`. No billing or
+  subscription metadata. Verified end-to-end by
+  `test_platform_admin_provisions_a_new_tenant_end_to_end` and
+  `test_only_platform_admin_can_manage_tenants`.
+
 **Explicitly not done, even now** (see DECISIONS.md ADR-010's Consequence) —
 each is its own follow-on phase, not a checklist item here:
 
-- [ ] Move `username` uniqueness from global to per-`(tenant_id, username)`
-  (or switch to email as the identifier) — required before a second tenant
-  can share the instance, since two different customers could otherwise
-  collide on a username. `create_user` still checks uniqueness install-wide.
-- [ ] Postgres Row-Level Security as a database-enforced backstop for the
-  shared-instance case specifically (not needed for a dedicated instance) —
-  app-layer scoping above is the only enforcement so far
-- [ ] A tenant provisioning flow (create a new tenant + its first admin
-  end-to-end) and any billing/subscription metadata — today a platform_admin
-  can only target an *existing* `Tenant` row (created directly, not via any
-  route) when creating a project/client/user
+- [ ] Extending Row-Level Security to tables nested under `Project`
+  (source_files, processing_jobs, project_revisions, site_model_entities,
+  calculation_results, project_summaries, question_answers,
+  project_memberships) via a policy checking `project_id IN (SELECT id FROM
+  projects WHERE ...)` — true defense-in-depth, but a larger follow-up
+- [ ] Any billing/subscription metadata on `Tenant`
 - [ ] Any frontend UI for `platform_admin`, multi-tenant administration, or
   surfacing `tenant_id` — everything above is API/backend-only
 
@@ -720,10 +763,13 @@ each is its own follow-on phase, not a checklist item here:
 - [x] `admin` no longer sees or manages data outside its own tenant;
   `platform_admin` still sees/manages everything, verified by
   `backend/tests/test_tenant_isolation.py`
-- [ ] Still open: per-tenant `username` uniqueness, Row-Level Security, and a
-  real provisioning flow — a shared instance is functionally isolated now,
-  but not yet operable end-to-end without direct database access to create
-  the second tenant in the first place
+- [x] Per-tenant `username` uniqueness, a tenant provisioning API, and a
+  written Row-Level Security backstop are all in place — a shared instance
+  is now operable end-to-end through the API alone. Remaining caveat: the
+  RLS migration is unverified against a real Postgres instance (no live
+  Postgres available in this environment) and must be confirmed before a
+  shared-instance deployment relies on it as an enforcement layer rather
+  than defense-in-depth on top of the (verified) app-layer scoping.
 
 ## 5. Testing Strategy
 

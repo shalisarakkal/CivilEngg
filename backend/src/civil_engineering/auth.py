@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from civil_engineering.config import get_settings
-from civil_engineering.database import get_db
+from civil_engineering.database import _set_rls_session_variables, get_db
 from civil_engineering.models import Client, Project, ProjectMembership, User
 from civil_engineering.models import Session as SessionModel
 
@@ -117,7 +117,26 @@ def get_current_user(request: Request, database: Session = Depends(get_db)) -> U
     user = database.get(User, session.user_id)
     if user is None or user.disabled_at is not None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account disabled")
+    _apply_tenant_rls_context(database, user)
     return user
+
+
+def _apply_tenant_rls_context(database: Session, user: User) -> None:
+    """Attaches this request's tenant context to the session for Postgres
+    Row-Level Security (migration 0021_add_row_level_security) and applies
+    it to the transaction already open from this function's own session/user
+    lookups above -- database.py's Session "after_begin" listener only
+    covers transactions that begin *after* this point (e.g. following a
+    mid-request commit), since it fires before a tenant is known for the
+    very first one. UNVERIFIED against a real Postgres instance -- see that
+    migration's docstring.
+    """
+    database.info["rls_tenant_id"] = user.tenant_id
+    database.info["rls_is_platform_admin"] = user.role == ROLE_PLATFORM_ADMIN
+    bind = database.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    _set_rls_session_variables(database.connection(), database.info)
 
 
 def logout_current_session(request: Request, database: Session) -> None:

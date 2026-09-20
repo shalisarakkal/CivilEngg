@@ -28,6 +28,7 @@ from civil_engineering.auth import (
     require_client_access,
     require_client_manager,
     require_client_manager_access,
+    require_platform_admin,
     require_project_archive_rights,
     require_project_member,
     require_project_owner,
@@ -89,6 +90,8 @@ from civil_engineering.schemas import (
     SiteModelRevisionResponse,
     SourceFileResponse,
     SummaryResponse,
+    TenantCreate,
+    TenantResponse,
     UserCreate,
     UserResponse,
     UserUpdate,
@@ -223,7 +226,7 @@ def _sweep_expired_archives(database: Session) -> None:
 
 @router.post("/auth/login", response_model=UserResponse)
 def login(payload: LoginRequest, response: Response, database: Session = Depends(get_db)) -> User:
-    user = database.scalar(select(User).where(User.username == payload.username))
+    user = database.scalar(select(User).where(User.email == payload.email))
     if (
         user is None
         or user.disabled_at is not None
@@ -310,19 +313,27 @@ def create_user(
     database: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ) -> User:
-    # Still a global uniqueness check, not yet per-tenant -- a separate,
-    # not-yet-done PLAN.md Phase 16 follow-on item (RISK_REGISTER.md).
-    existing = database.scalar(select(User).where(User.username == payload.username))
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="Username already exists")
     if admin.role == ROLE_PLATFORM_ADMIN:
         tenant_id = payload.tenant_id
         if tenant_id is not None and database.get(Tenant, tenant_id) is None:
             raise HTTPException(status_code=422, detail="tenant_id does not exist")
     else:
         tenant_id = admin.tenant_id
+    # Username is unique per tenant, not globally (PLAN.md Phase 16) -- must
+    # know the target tenant (above) before this check means anything.
+    existing_username = database.scalar(
+        select(User).where(User.tenant_id == tenant_id, User.username == payload.username)
+    )
+    if existing_username is not None:
+        raise HTTPException(status_code=409, detail="Username already exists in this tenant")
+    # email stays globally unique -- it's the login identifier, and a login
+    # attempt must never be ambiguous about which tenant's user is meant.
+    existing_email = database.scalar(select(User).where(User.email == payload.email))
+    if existing_email is not None:
+        raise HTTPException(status_code=409, detail="Email already exists")
     user = User(
         username=payload.username,
+        email=payload.email,
         password_hash=hash_password(payload.password),
         role=payload.role,
         tenant_id=tenant_id,
@@ -412,6 +423,13 @@ def update_user(
             # it despite `user` never being allowed those "anywhere".
             _require_no_owned_projects(database, user)
         user.role = payload.role
+    if payload.email is not None:
+        existing_email = database.scalar(
+            select(User).where(User.email == payload.email, User.id != user.id)
+        )
+        if existing_email is not None:
+            raise HTTPException(status_code=409, detail="Email already exists")
+        user.email = payload.email
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
     database.commit()
@@ -550,6 +568,31 @@ def reassign_project_owner(
     database.commit()
     database.refresh(project)
     return project
+
+
+@router.post("/tenants", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
+def create_tenant(
+    payload: TenantCreate,
+    database: Session = Depends(get_db),
+    _platform_admin: User = Depends(require_platform_admin),
+) -> Tenant:
+    """Provisions a new tenant for the hybrid deployment model (PLAN.md Phase
+    16, DECISIONS.md ADR-010) -- platform_admin only, since this is a
+    platform-wide action with no single tenant to scope it to. Create the
+    tenant's first admin afterward via POST /users with this tenant's id as
+    tenant_id and role=admin."""
+    tenant = Tenant(name=payload.name)
+    database.add(tenant)
+    database.commit()
+    database.refresh(tenant)
+    return tenant
+
+
+@router.get("/tenants", response_model=list[TenantResponse])
+def list_tenants(
+    database: Session = Depends(get_db), _platform_admin: User = Depends(require_platform_admin)
+) -> list[Tenant]:
+    return list(database.scalars(select(Tenant).order_by(Tenant.name)))
 
 
 @router.post("/clients", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)

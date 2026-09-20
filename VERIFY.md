@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0019_add_tenants (head)
+0021_add_row_level_security (head)
 ```
 
 Return to the project root:

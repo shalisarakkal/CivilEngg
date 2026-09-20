@@ -10,6 +10,7 @@ type Role = "admin" | "power_user" | "user";
 type ManagedUser = {
   id: string;
   username: string;
+  email: string | null;
   role: Role;
   disabled_at: string | null;
 };
@@ -19,6 +20,7 @@ function UsersAdminPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [newUsername, setNewUsername] = useState("");
+  const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("user");
   const [userPendingDelete, setUserPendingDelete] = useState<ManagedUser | null>(null);
@@ -51,10 +53,16 @@ function UsersAdminPage() {
     const response = await apiFetch(`${apiUrl}/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole }),
+      body: JSON.stringify({
+        username: newUsername,
+        email: newEmail,
+        password: newPassword,
+        role: newRole,
+      }),
     });
     if (response.ok) {
       setNewUsername("");
+      setNewEmail("");
       setNewPassword("");
       setNewRole("user");
       await loadUsers();
@@ -177,6 +185,13 @@ function UsersAdminPage() {
             required
           />
           <input
+            type="email"
+            placeholder="Email"
+            value={newEmail}
+            onChange={(event) => setNewEmail(event.target.value)}
+            required
+          />
+          <input
             type="password"
             placeholder="Password (min. 8 characters)"
             value={newPassword}
@@ -197,6 +212,7 @@ function UsersAdminPage() {
           <div className="archive-row" key={user.id}>
             <div className="archive-row-top">
               <strong>{user.username}</strong>
+              <small>{user.email ?? "no email on file"}</small>
               <small>{user.disabled_at ? "disabled" : "active"}</small>
             </div>
             <div className="input-row">
