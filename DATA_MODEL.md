@@ -194,5 +194,5 @@ SourceFile 1 -- 1 SourceFile                  (superseded_by_id, optional: the f
 ## Open Modeling Questions
 
 - Which projected coordinate reference systems to support explicitly. Whether a geographic (lat/lon) CRS should be rejected is settled: it is (see RISK_REGISTER.md) — a project cannot adopt one, and planar measurements are refused for any project that already carries one.
-- How `Tenant` scoping is actually enforced (query-level filtering, and whether `User.username` moves from globally unique to unique per tenant) — see RISK_REGISTER.md and PLAN.md Phase 16's explicitly-deferred follow-on items.
+- Query-level `Tenant` scoping is now enforced (2026-09-20 — see RISK_REGISTER.md and PLAN.md Phase 16); still open: whether `User.username` moves from globally unique to unique per tenant, a database-enforced backstop (Row-Level Security), and an actual tenant-provisioning API.
 - `User`, `Session`, and `ProjectMembership` (added in Phase 15) are not yet documented in "Initial Entities" above — a pre-existing gap noted here rather than backfilled in this pass.

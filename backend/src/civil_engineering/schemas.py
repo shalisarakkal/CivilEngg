@@ -5,6 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    # Only meaningful when the caller is a platform_admin (must name an
+    # existing tenant); ignored otherwise, since every other caller's new
+    # client always belongs to their own tenant. See create_client in
+    # routes.py.
+    tenant_id: str | None = None
 
 
 class ClientUpdate(BaseModel):
@@ -15,6 +20,7 @@ class ClientResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant_id: str | None
     name: str
     created_at: datetime
     updated_at: datetime
@@ -31,6 +37,11 @@ class ProjectCreate(BaseModel):
     # a power_user caller always becomes owner of their own new project and
     # this field is ignored for them. See create_project in routes.py.
     owner_id: str | None = None
+    # Only meaningful when the caller is a platform_admin (must name an
+    # existing tenant, and owner_id must belong to it); ignored otherwise,
+    # since every other caller's new project always belongs to their own
+    # tenant. See create_project in routes.py.
+    tenant_id: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -47,6 +58,7 @@ class ProjectResponse(BaseModel):
     id: str
     client_id: str | None
     owner_id: str | None
+    tenant_id: str | None
     name: str
     description: str | None
     default_unit_system: str
@@ -217,6 +229,10 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8)
     role: str = Field(default="user", pattern=ROLE_PATTERN)
+    # Only meaningful when the caller is a platform_admin (must name an
+    # existing tenant); ignored otherwise, since every other caller's new
+    # user always belongs to their own tenant. See create_user in routes.py.
+    tenant_id: str | None = None
 
 
 class PasswordChangeRequest(BaseModel):
@@ -236,6 +252,7 @@ class UserResponse(BaseModel):
     id: str
     username: str
     role: str
+    tenant_id: str | None
     created_at: datetime
     updated_at: datetime
     disabled_at: datetime | None

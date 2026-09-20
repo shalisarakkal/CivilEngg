@@ -616,7 +616,7 @@ DB enum, `purge_history.purged_by_user_id`).
   items above are done; Playwright verified by an actual run — 22/22
   passing — not just by reading the code)
 
-### Phase 16 - Multi-Tenant Foundation (schema only)
+### Phase 16 - Multi-Tenant Foundation and Query-Scoping Enforcement
 
 **Objective:** Raised in conversation (2026-09-20) as a hybrid business model
 not covered by ADR-002's dedicated-install assumption: a customer whose
@@ -626,9 +626,7 @@ install), versus vendor-operated infrastructure shared across several
 subscribing customers at once, each one a `Tenant`, with no data shared
 between them. See DECISIONS.md ADR-010 for the full analysis and why one
 schema serves both cases plus the original dedicated-install model, rather
-than three different data models. This phase is schema and bootstrap only —
-it deliberately does not turn on any isolation, and is not safe to run a
-shared instance on by itself.
+than three different data models.
 
 **Work items:**
 
@@ -656,34 +654,76 @@ shared instance on by itself.
   has no reason to ever create one, and none of the 134 existing tests
   changed behavior. Regression tests: `test_platform_admin_is_a_superset_of_admin`,
   `test_last_active_admin_protection_spans_both_admin_tier_roles`.
+- [x] Query-scoping enforcement (2026-09-20) — the real isolation boundary.
+  `admin` is no longer install-wide: it now sees/manages only its own
+  tenant's projects, clients, and users; `platform_admin` still crosses
+  every tenant. Covers:
+  - `is_project_member`/`is_project_owner` (and therefore every route
+    depending on `require_project_member`/`require_project_owner`/
+    `require_project_archive_rights` — files, processing, site-model,
+    calculations, summaries, questions, members): a project outside the
+    caller's tenant is 404, regardless of role, owner_id, or a stray
+    membership row.
+  - New `require_client_access`/`require_client_manager_access`
+    dependencies giving `GET/PATCH /clients/{id}` and
+    `POST /clients/{id}/archive` the same tenant check.
+  - `list_projects`, `list_archived_projects`, `list_clients`, `list_users`,
+    `list_archived_files`, `list_purge_history` all tenant-filtered for
+    `admin`, unfiltered for `platform_admin`, and (unchanged) narrowed to
+    owned/member projects for everyone else — already implicitly
+    tenant-consistent since every write path below enforces matching
+    tenants.
+  - Write-time tenant assignment: `create_project`/`create_client`/
+    `create_user` assign the creator's own tenant, or (platform_admin only)
+    an explicit `tenant_id` naming a real `Tenant`.
+  - Cross-tenant reference checks: `add_project_member`'s collaborator,
+    `reassign_project_owner`'s new owner, and a project's linked `client_id`
+    (at both create and update) must all belong to the project's own
+    tenant, regardless of caller role.
+  - `_require_not_last_active_admin` is now tenant-aware: a `platform_admin`
+    anywhere, or another `admin` in the SAME tenant, counts; an `admin` in a
+    *different* tenant no longer does (a real behavior change from the
+    platform_admin slice above, exercised by
+    `test_last_active_admin_protection_no_longer_crosses_tenants`).
+  - `ProjectResponse`/`ClientResponse`/`UserResponse` now include `tenant_id`
+    (needed for a `platform_admin` to make sense of cross-tenant data); not
+    exposed in any frontend UI yet.
+  - All 134 pre-existing tests still pass unchanged (every existing fixture
+    leaves `tenant_id` unset on both sides of every comparison, so nothing
+    was ever rejected) — new coverage in
+    `backend/tests/test_tenant_isolation.py` (8 tests) actually exercises
+    two tenants at once, verified as real (not vacuous) by reverting the
+    core tenant check and confirming a failure before restoring it.
 
-**Explicitly not done in this phase** (see DECISIONS.md ADR-010's
-Consequence) — each is its own follow-on phase, not a checklist item here:
+**Explicitly not done, even now** (see DECISIONS.md ADR-010's Consequence) —
+each is its own follow-on phase, not a checklist item here:
 
-- [ ] Scope every list/read query by `tenant_id` (the real isolation
-  enforcement; comparable in size to Phase 15's ~34 permission call sites,
-  but a missed one is a cross-*customer* leak, not a contained permission
-  bug). `platform_admin` from the item above is what such scoping would
-  exempt from the `tenant_id` filter, the same way `admin` is exempted from
-  today's project-ownership filters
 - [ ] Move `username` uniqueness from global to per-`(tenant_id, username)`
   (or switch to email as the identifier) — required before a second tenant
   can share the instance, since two different customers could otherwise
-  collide on a username
+  collide on a username. `create_user` still checks uniqueness install-wide.
 - [ ] Postgres Row-Level Security as a database-enforced backstop for the
-  shared-instance case specifically (not needed for a dedicated instance)
-- [ ] A tenant provisioning flow (create a new tenant + its first admin) and
-  any billing/subscription metadata — not needed until a second tenant
-  actually exists on a shared instance
+  shared-instance case specifically (not needed for a dedicated instance) —
+  app-layer scoping above is the only enforcement so far
+- [ ] A tenant provisioning flow (create a new tenant + its first admin
+  end-to-end) and any billing/subscription metadata — today a platform_admin
+  can only target an *existing* `Tenant` row (created directly, not via any
+  route) when creating a project/client/user
+- [ ] Any frontend UI for `platform_admin`, multi-tenant administration, or
+  surfacing `tenant_id` — everything above is API/backend-only
 
 **Exit criteria:**
 
 - [x] A dedicated install (single tenant, backfilled automatically) behaves
   identically to before this phase — no endpoint, permission check, or test
   changed behavior
-- [ ] Deliberately open until a follow-on phase closes it: nothing yet
-  enforces tenant isolation, so this phase alone does not make a
-  shared-instance deployment safe
+- [x] `admin` no longer sees or manages data outside its own tenant;
+  `platform_admin` still sees/manages everything, verified by
+  `backend/tests/test_tenant_isolation.py`
+- [ ] Still open: per-tenant `username` uniqueness, Row-Level Security, and a
+  real provisioning flow — a shared instance is functionally isolated now,
+  but not yet operable end-to-end without direct database access to create
+  the second tenant in the first place
 
 ## 5. Testing Strategy
 
@@ -809,19 +849,13 @@ items above:
    This item is also what would replace [CLIENT_INSTALL.md](CLIENT_INSTALL.md)'s
    manual, interim client-site install procedure with a single installer.
 10. **`Tenant` entity for a hybrid dedicated/shared-instance business
-    model** — schema and bootstrap foundation shipped as Phase 16
-    (2026-09-20); see that phase entry above and DECISIONS.md ADR-010 for
-    the full analysis of why one schema serves a customer's own dedicated
-    install (ADR-002), a vendor-operated-but-still-dedicated install, and
-    a vendor-operated instance shared across several subscribing
-    customers. Real tenant-isolation *enforcement* is not part of Phase
-    16 and remains here as later, larger follow-on work, roughly in order
-    of what a shared instance would need first:
-    - Scope every list/read query by `tenant_id` — comparable in size to
-      Phase 15's ~34 permission call sites, but a missed one here is a
-      cross-*customer* data leak rather than a contained permission bug.
-      (The `platform_admin` role this scoping would exempt already exists,
-      shipped 2026-09-20 — see the phase entry above.)
+    model** — schema, bootstrap, the `platform_admin` role, and full
+    query-scoping enforcement shipped as Phase 16 (2026-09-20); see that
+    phase entry above and DECISIONS.md ADR-010 for the full analysis of why
+    one schema serves a customer's own dedicated install (ADR-002), a
+    vendor-operated-but-still-dedicated install, and a vendor-operated
+    instance shared across several subscribing customers. What's left,
+    roughly in order of what a shared instance would need next:
     - Move `username` uniqueness from global to per-`(tenant_id,
       username)`, or switch to email as the identifier — required before
       a second tenant can safely share an instance.
@@ -829,8 +863,10 @@ items above:
       shared-instance case specifically (a dedicated instance doesn't
       need it — the OS/database separation, or simply having only one
       tenant row, already provides it).
-    - A tenant provisioning flow and billing/subscription metadata — not
-      needed until a second tenant actually exists on a shared instance.
+    - A tenant provisioning flow and billing/subscription metadata — today
+      a `platform_admin` can only target an *existing* `Tenant` row when
+      creating a project/client/user; nothing yet creates the tenant
+      itself via the API.
 
 ## 9. Nice-to-Have Improvements
 

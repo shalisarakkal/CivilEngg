@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from civil_engineering.ai_service import MockAIProvider, route_question
 from civil_engineering.auth import (
     ADMIN_TIER_ROLES,
+    ROLE_ADMIN,
+    ROLE_PLATFORM_ADMIN,
     ROLE_POWER_USER,
     ROLE_USER,
     clear_session_cookie,
@@ -23,7 +25,9 @@ from civil_engineering.auth import (
     is_project_owner,
     logout_current_session,
     require_admin,
+    require_client_access,
     require_client_manager,
+    require_client_manager_access,
     require_project_archive_rights,
     require_project_member,
     require_project_owner,
@@ -55,6 +59,7 @@ from civil_engineering.models import (
     QuestionAnswer,
     SiteModelEntity,
     SourceFile,
+    Tenant,
     User,
     new_id,
 )
@@ -261,10 +266,19 @@ def _require_not_last_active_admin(database: Session, target: User) -> None:
     # admin-tier account still exists" the same way a plain admin does.
     if target.role not in ADMIN_TIER_ROLES or target.disabled_at is not None:
         return
+    # A platform_admin anywhere in the install counts (it can already manage
+    # any tenant), or another admin within target's OWN tenant -- admin no
+    # longer means "the whole install" (PLAN.md Phase 16), so an admin in a
+    # different tenant doesn't help target's tenant keep an admin.
     other_admins = database.scalar(
         select(func.count())
         .select_from(User)
-        .where(User.role.in_(ADMIN_TIER_ROLES), User.disabled_at.is_(None), User.id != target.id)
+        .where(
+            User.disabled_at.is_(None),
+            User.id != target.id,
+            (User.role == ROLE_PLATFORM_ADMIN)
+            | ((User.role == ROLE_ADMIN) & (User.tenant_id == target.tenant_id)),
+        )
     )
     if not other_admins:
         raise HTTPException(
@@ -294,13 +308,24 @@ def _require_no_owned_projects(database: Session, target: User) -> None:
 def create_user(
     payload: UserCreate,
     database: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> User:
+    # Still a global uniqueness check, not yet per-tenant -- a separate,
+    # not-yet-done PLAN.md Phase 16 follow-on item (RISK_REGISTER.md).
     existing = database.scalar(select(User).where(User.username == payload.username))
     if existing is not None:
         raise HTTPException(status_code=409, detail="Username already exists")
+    if admin.role == ROLE_PLATFORM_ADMIN:
+        tenant_id = payload.tenant_id
+        if tenant_id is not None and database.get(Tenant, tenant_id) is None:
+            raise HTTPException(status_code=422, detail="tenant_id does not exist")
+    else:
+        tenant_id = admin.tenant_id
     user = User(
-        username=payload.username, password_hash=hash_password(payload.password), role=payload.role
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+        tenant_id=tenant_id,
     )
     database.add(user)
     database.commit()
@@ -310,22 +335,31 @@ def create_user(
 
 @router.get("/users", response_model=list[UserResponse])
 def list_users(
-    database: Session = Depends(get_db), _admin: User = Depends(require_admin)
+    database: Session = Depends(get_db), admin: User = Depends(require_admin)
 ) -> list[User]:
-    return list(database.scalars(select(User).order_by(User.username)))
+    statement = select(User).order_by(User.username)
+    if admin.role != ROLE_PLATFORM_ADMIN:
+        statement = statement.where(User.tenant_id == admin.tenant_id)
+    return list(database.scalars(statement))
 
 
 @router.get("/users/lookup", response_model=UserResponse)
 def lookup_user_by_username(
     username: str,
     database: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> User:
     """Exact-match username -> user, for any authenticated caller (not just
     admins). Needed so a Power User project owner can add a collaborator by
     username without the full-directory access GET /users requires -- this
-    only confirms one exact username, it doesn't enumerate the directory."""
-    user = database.scalar(select(User).where(User.username == username))
+    only confirms one exact username, it doesn't enumerate the directory.
+    Scoped to the caller's own tenant (platform_admin excepted): finding a
+    cross-tenant username would be an information leak, and the collaborator
+    would be rejected anyway when actually added (see add_project_member)."""
+    statement = select(User).where(User.username == username)
+    if current_user.role != ROLE_PLATFORM_ADMIN:
+        statement = statement.where(User.tenant_id == current_user.tenant_id)
+    user = database.scalar(statement)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
@@ -338,14 +372,25 @@ def get_user_or_404(user_id: str, database: Session) -> User:
     return user
 
 
+def _require_manageable_user(user_id: str, database: Session, admin: User) -> User:
+    """Like get_user_or_404, but 404s a user outside the calling admin's own
+    tenant instead of returning it -- an admin manages its own tenant's
+    users, not the whole install (PLAN.md Phase 16). platform_admin is
+    exempt, same as everywhere else."""
+    user = get_user_or_404(user_id, database)
+    if admin.role != ROLE_PLATFORM_ADMIN and user.tenant_id != admin.tenant_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
 @router.patch("/users/{user_id}", response_model=UserResponse)
 def update_user(
     user_id: str,
     payload: UserUpdate,
     database: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> User:
-    user = get_user_or_404(user_id, database)
+    user = _require_manageable_user(user_id, database, admin)
     if payload.disabled is True:
         _require_not_last_active_admin(database, user)
         _require_no_owned_projects(database, user)
@@ -378,9 +423,9 @@ def update_user(
 def delete_user(
     user_id: str,
     database: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> None:
-    user = get_user_or_404(user_id, database)
+    user = _require_manageable_user(user_id, database, admin)
     _require_not_last_active_admin(database, user)
     _require_no_owned_projects(database, user)
     database.delete(user)
@@ -420,6 +465,10 @@ def add_project_member(
     database: Session = Depends(get_db),
 ) -> ProjectMembershipResponse:
     member = get_user_or_404(payload.user_id, database)
+    if member.tenant_id != project.tenant_id:
+        raise HTTPException(
+            status_code=422, detail="A collaborator must belong to the project's own tenant"
+        )
     if member.id == project.owner_id:
         raise HTTPException(
             status_code=422, detail="The owner is already associated with this project"
@@ -466,6 +515,10 @@ def reassign_project_owner(
         raise HTTPException(status_code=422, detail="A project owner must be a power_user")
     if new_owner.disabled_at is not None:
         raise HTTPException(status_code=422, detail="Cannot assign a disabled user as owner")
+    if new_owner.tenant_id != project.tenant_id:
+        raise HTTPException(
+            status_code=422, detail="A project owner must belong to the project's own tenant"
+        )
     previous_owner_id = project.owner_id
     project.owner_id = new_owner.id
     # The new owner's access no longer depends on a membership row.
@@ -503,9 +556,15 @@ def reassign_project_owner(
 def create_client(
     payload: ClientCreate,
     database: Session = Depends(get_db),
-    _user: User = Depends(require_client_manager),
+    user: User = Depends(require_client_manager),
 ) -> Client:
-    client = Client(name=payload.name)
+    if user.role == ROLE_PLATFORM_ADMIN:
+        tenant_id = payload.tenant_id
+        if tenant_id is not None and database.get(Tenant, tenant_id) is None:
+            raise HTTPException(status_code=422, detail="tenant_id does not exist")
+    else:
+        tenant_id = user.tenant_id
+    client = Client(name=payload.name, tenant_id=tenant_id)
     database.add(client)
     database.commit()
     database.refresh(client)
@@ -514,27 +573,25 @@ def create_client(
 
 @router.get("/clients", response_model=list[ClientResponse])
 def list_clients(
-    database: Session = Depends(get_db), _user: User = Depends(get_current_user)
+    database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> list[Client]:
     statement = select(Client).where(Client.archived_at.is_(None)).order_by(Client.name)
+    if current_user.role != ROLE_PLATFORM_ADMIN:
+        statement = statement.where(Client.tenant_id == current_user.tenant_id)
     return list(database.scalars(statement))
 
 
 @router.get("/clients/{client_id}", response_model=ClientResponse)
-def read_client(
-    client_id: str, database: Session = Depends(get_db), _user: User = Depends(get_current_user)
-) -> Client:
-    return get_client_or_404(client_id, database)
+def read_client(client: Client = Depends(require_client_access)) -> Client:
+    return client
 
 
 @router.patch("/clients/{client_id}", response_model=ClientResponse)
 def update_client(
-    client_id: str,
     payload: ClientUpdate,
+    client: Client = Depends(require_client_manager_access),
     database: Session = Depends(get_db),
-    _user: User = Depends(require_client_manager),
 ) -> Client:
-    client = get_client_or_404(client_id, database)
     if payload.name is not None:
         client.name = payload.name
     database.commit()
@@ -544,11 +601,8 @@ def update_client(
 
 @router.post("/clients/{client_id}/archive", response_model=ClientResponse)
 def archive_client(
-    client_id: str,
-    database: Session = Depends(get_db),
-    _user: User = Depends(require_client_manager),
+    client: Client = Depends(require_client_manager_access), database: Session = Depends(get_db)
 ) -> Client:
-    client = get_client_or_404(client_id, database)
     client.archived_at = datetime.now(timezone.utc)
     database.commit()
     database.refresh(client)
@@ -581,12 +635,11 @@ def create_project(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins and power users can create projects",
         )
-    if payload.client_id is not None:
-        get_client_or_404(payload.client_id, database)
     _require_projected_crs(payload.coordinate_reference_system)
     data = payload.model_dump()
     if current_user.role == ROLE_POWER_USER:
         data["owner_id"] = current_user.id
+        data["tenant_id"] = current_user.tenant_id
     else:  # admin or platform_admin
         owner_id = data.get("owner_id")
         if not owner_id:
@@ -596,6 +649,27 @@ def create_project(
         owner = get_user_or_404(owner_id, database)
         if owner.role != ROLE_POWER_USER:
             raise HTTPException(status_code=422, detail="A project owner must be a power_user")
+        if current_user.role == ROLE_PLATFORM_ADMIN:
+            tenant_id = data.get("tenant_id")
+            if not tenant_id:
+                raise HTTPException(
+                    status_code=422, detail="tenant_id is required for a platform_admin caller"
+                )
+            if database.get(Tenant, tenant_id) is None:
+                raise HTTPException(status_code=422, detail="tenant_id does not exist")
+        else:
+            tenant_id = current_user.tenant_id
+        data["tenant_id"] = tenant_id
+        if owner.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=422, detail="A project owner must belong to the project's own tenant"
+            )
+    if payload.client_id is not None:
+        client = get_client_or_404(payload.client_id, database)
+        if client.tenant_id != data["tenant_id"]:
+            raise HTTPException(
+                status_code=422, detail="A project's client must belong to the project's own tenant"
+            )
     project = Project(**data)
     database.add(project)
     database.commit()
@@ -608,8 +682,12 @@ def list_projects(
     database: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> list[Project]:
     statement = select(Project).where(Project.archived_at.is_(None)).order_by(Project.name)
-    if current_user.role not in ADMIN_TIER_ROLES:
-        statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
+    if current_user.role != ROLE_PLATFORM_ADMIN:
+        statement = statement.where(Project.tenant_id == current_user.tenant_id)
+        if current_user.role != ROLE_ADMIN:
+            statement = statement.where(
+                Project.id.in_(user_owned_project_ids(database, current_user))
+            )
     return list(database.scalars(statement))
 
 
@@ -626,7 +704,11 @@ def update_project(
 ) -> Project:
     values = payload.model_dump(exclude_unset=True)
     if "client_id" in values and values["client_id"] is not None:
-        get_client_or_404(values["client_id"], database)
+        client = get_client_or_404(values["client_id"], database)
+        if client.tenant_id != project.tenant_id:
+            raise HTTPException(
+                status_code=422, detail="A project's client must belong to the project's own tenant"
+            )
     if "coordinate_reference_system" in values:
         _require_projected_crs(values["coordinate_reference_system"])
     for key, value in values.items():
@@ -662,8 +744,12 @@ def list_archived_projects(
     statement = (
         select(Project).where(Project.archived_at.is_not(None)).order_by(Project.archived_at.desc())
     )
-    if current_user.role not in ADMIN_TIER_ROLES:
-        statement = statement.where(Project.id.in_(user_owned_project_ids(database, current_user)))
+    if current_user.role != ROLE_PLATFORM_ADMIN:
+        statement = statement.where(Project.tenant_id == current_user.tenant_id)
+        if current_user.role != ROLE_ADMIN:
+            statement = statement.where(
+                Project.id.in_(user_owned_project_ids(database, current_user))
+            )
     projects = database.scalars(statement)
     responses = []
     for project in projects:
@@ -1006,10 +1092,16 @@ def list_archived_files(
         .where(SourceFile.deleted_at.is_not(None))
         .order_by(SourceFile.deleted_at.desc())
     )
-    if current_user.role not in ADMIN_TIER_ROLES:
-        statement = statement.where(
-            SourceFile.project_id.in_(user_owned_project_ids(database, current_user))
-        )
+    if current_user.role != ROLE_PLATFORM_ADMIN:
+        if current_user.role == ROLE_ADMIN:
+            tenant_project_ids = select(Project.id).where(
+                Project.tenant_id == current_user.tenant_id
+            )
+            statement = statement.where(SourceFile.project_id.in_(tenant_project_ids))
+        else:
+            statement = statement.where(
+                SourceFile.project_id.in_(user_owned_project_ids(database, current_user))
+            )
     files = database.scalars(statement)
     responses = []
     for source_file in files:
@@ -1085,10 +1177,24 @@ def list_purge_history(
             status_code=status.HTTP_403_FORBIDDEN, detail="Archive/purge rights required"
         )
     statement = select(PurgeHistoryEntry).order_by(PurgeHistoryEntry.purged_at.desc())
-    if current_user.role not in ADMIN_TIER_ROLES:
-        # project_id/resource_id cover a still-existing project's file purges;
-        # purged_by_user_id covers a purged *project* itself, where the
-        # ownership row that would otherwise answer "was this mine" is gone.
+    if current_user.role == ROLE_ADMIN:
+        # project_id/resource_id cover a still-existing project's file purges
+        # (its tenant is still readable); purged_by_user_id covers a purged
+        # *project* itself, where the ownership row that would otherwise
+        # answer "was this in my tenant" is gone -- fall back to the tenant
+        # of whoever it was purged from instead.
+        tenant_project_ids = set(
+            database.scalars(select(Project.id).where(Project.tenant_id == current_user.tenant_id))
+        )
+        tenant_user_ids = set(
+            database.scalars(select(User.id).where(User.tenant_id == current_user.tenant_id))
+        )
+        statement = statement.where(
+            PurgeHistoryEntry.project_id.in_(tenant_project_ids)
+            | PurgeHistoryEntry.resource_id.in_(tenant_project_ids)
+            | PurgeHistoryEntry.purged_by_user_id.in_(tenant_user_ids)
+        )
+    elif current_user.role != ROLE_PLATFORM_ADMIN:
         accessible = set(user_owned_project_ids(database, current_user))
         statement = statement.where(
             PurgeHistoryEntry.project_id.in_(accessible)

@@ -6,13 +6,12 @@ never using a DB-level enum (see models.py's SiteModelEntity.validation_status
 and CalculationResult.calculation_type for the precedent).
 
 platform_admin (PLAN.md Phase 16, DECISIONS.md ADR-010) is a superset of admin:
-everywhere admin bypasses a per-project/per-install restriction, platform_admin
-does too, plus (once tenant-scoping exists in a later phase) across every
-tenant rather than just the one admin already sees everything within. A
-dedicated install has no reason to ever create one -- there's nothing "above"
-its single tenant to administer -- so this role only matters once a shared
-instance exists, and nothing here changes behavior for an install that
-doesn't have one.
+everywhere admin bypasses a per-project/per-client/per-install restriction,
+platform_admin does too, plus it crosses tenant boundaries where admin does
+not -- admin sees/manages everything within its OWN tenant, not the whole
+install. A dedicated install has no reason to ever create a platform_admin --
+there's nothing "above" its single tenant to administer -- so nothing here
+changes behavior for an install that doesn't have one.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from civil_engineering.config import get_settings
 from civil_engineering.database import get_db
-from civil_engineering.models import Project, ProjectMembership, User
+from civil_engineering.models import Client, Project, ProjectMembership, User
 from civil_engineering.models import Session as SessionModel
 
 SESSION_COOKIE_NAME = "session_id"
@@ -150,19 +149,67 @@ def require_platform_admin(user: User = Depends(get_current_user)) -> User:
 
 
 def require_client_manager(user: User = Depends(get_current_user)) -> User:
-    """Clients aren't project-scoped; admin/power_user can manage them, plain
-    user gets read-only (same archive-rights boundary as everything else)."""
+    """For creating a new client, where there's no existing client_id to check
+    tenant access against yet -- see require_client_manager_access for an
+    existing one. admin/power_user can manage clients, plain user gets
+    read-only (same archive-rights boundary as everything else)."""
     if user.role == ROLE_USER:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
     return user
+
+
+def _get_client_or_404(database: Session, client_id: str) -> Client:
+    client = database.get(Client, client_id)
+    if client is None or client.archived_at is not None:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return client
+
+
+def require_client_access(
+    client_id: str,
+    user: User = Depends(get_current_user),
+    database: Session = Depends(get_db),
+) -> Client:
+    """Read access to an existing client -- 404, not 403, for a client
+    outside the caller's tenant, matching require_project_member's
+    don't-reveal-existence pattern. platform_admin crosses tenant boundaries;
+    everyone else, including admin, does not (admin manages its own tenant's
+    clients, not the whole install -- PLAN.md Phase 16)."""
+    client = _get_client_or_404(database, client_id)
+    if user.role != ROLE_PLATFORM_ADMIN and client.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return client
+
+
+def require_client_manager_access(
+    client: Client = Depends(require_client_access), user: User = Depends(get_current_user)
+) -> Client:
+    """Write access to an existing client: tenant access (above) plus the
+    same role floor as require_client_manager."""
+    if user.role == ROLE_USER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+    return client
 
 
 def is_project_member(database: Session, project: Project, user: User) -> bool:
     """True if the user is admin, owner, or an associated collaborator -- the
     baseline required to see/act on this project at all. Works regardless of
     whether the project is currently archived (unlike require_project_member,
-    which is for the common active-project case)."""
-    if user.role in ADMIN_TIER_ROLES:
+    which is for the common active-project case).
+
+    platform_admin crosses tenant boundaries; admin's bypass does not -- it
+    sees/manages every project within its OWN tenant, not the whole install
+    (PLAN.md Phase 16's query-scoping slice). A project outside the caller's
+    tenant is invisible to everyone except platform_admin, regardless of role
+    or an owner_id/membership row that would otherwise grant access -- that
+    can only happen for data that predates tenant assignment or was
+    mismigrated, and treating it as inaccessible is the safe default.
+    """
+    if user.role == ROLE_PLATFORM_ADMIN:
+        return True
+    if project.tenant_id != user.tenant_id:
+        return False
+    if user.role == ROLE_ADMIN:
         return True
     if project.owner_id == user.id:
         return True
@@ -175,7 +222,11 @@ def is_project_member(database: Session, project: Project, user: User) -> bool:
 
 
 def is_project_owner(project: Project, user: User) -> bool:
-    return user.role in ADMIN_TIER_ROLES or project.owner_id == user.id
+    if user.role == ROLE_PLATFORM_ADMIN:
+        return True
+    if project.tenant_id != user.tenant_id:
+        return False
+    return user.role == ROLE_ADMIN or project.owner_id == user.id
 
 
 def _get_project_or_404(database: Session, project_id: str) -> Project:
@@ -218,7 +269,7 @@ def require_project_owner(
     database: Session = Depends(get_db),
 ) -> Project:
     project = _get_project_or_404(database, project_id)
-    if user.role not in ADMIN_TIER_ROLES and project.owner_id != user.id:
+    if not is_project_owner(project, user):
         if not is_project_member(database, project, user):
             raise HTTPException(status_code=404, detail="Project not found")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Project owner required")

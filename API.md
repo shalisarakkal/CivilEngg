@@ -22,7 +22,8 @@ Returns application and dependency status.
 - `POST /auth/login` - log in, sets an httpOnly session cookie
 - `POST /auth/logout` - revoke the current session
 - `GET /auth/me` - the logged-in user
-- `POST /users` / `GET /users` / `PATCH /users/{user_id}` / `DELETE /users/{user_id}` - user management (admin only)
+- `POST /users` / `GET /users` / `PATCH /users/{user_id}` / `DELETE /users/{user_id}` - user management (admin only, scoped to the caller's own tenant — see below)
+- `GET /users/lookup?username=` - exact-username lookup, scoped to the caller's own tenant (any authenticated caller, not just admins)
 
 Every route below requires a logged-in session, and most are further
 scoped to a role and/or project ownership/membership — see
@@ -30,18 +31,31 @@ DECISIONS.md ADR-009 and PLAN.md Phase 15 for the full matrix. A
 caller who isn't a member of a given project gets `404` (not `403`)
 so a project's existence isn't leaked to someone unauthorized to see it.
 
+A `platform_admin` role sits above `admin` (PLAN.md Phase 16, DECISIONS.md
+ADR-010): `admin` sees/manages projects, clients, and users within its own
+tenant only, not the whole install; `platform_admin` crosses every tenant.
+Every list/read endpoint below that says "admin sees all" means "within its
+own tenant" for `admin`, and genuinely all of them for `platform_admin`. A
+resource outside the caller's tenant is `404`, the same don't-leak-existence
+treatment as an unauthorized project. Creating a project, client, or user
+assigns the caller's own tenant automatically; a `platform_admin` caller may
+instead name an existing tenant explicitly via `tenant_id` in the request
+body. This is enforced today with no database-level backstop yet (no
+Postgres Row-Level Security) and no way to create a *new* tenant via the
+API — see RISK_REGISTER.md.
+
 ## Clients
 
 - `POST /clients` - create a client (admin/power_user)
-- `GET /clients` - list clients
-- `GET /clients/{client_id}` - retrieve a client
-- `PATCH /clients/{client_id}` - update a client (admin/power_user)
+- `GET /clients` - list clients (scoped to the caller's own tenant; platform_admin sees all)
+- `GET /clients/{client_id}` - retrieve a client (scoped to the caller's own tenant)
+- `PATCH /clients/{client_id}` - update a client (admin/power_user, own tenant)
 - `POST /clients/{client_id}/archive` - archive a client (admin/power_user)
 
 ## Projects
 
 - `POST /projects` - create a project (admin/power_user; a power_user caller auto-becomes owner)
-- `GET /projects` - list projects (admin sees all; everyone else sees only projects they own or are a member of)
+- `GET /projects` - list projects (admin sees all within its own tenant; platform_admin sees all across every tenant; everyone else sees only projects they own or are a member of)
 - `GET /projects/{project_id}` - retrieve a project
 - `PATCH /projects/{project_id}` - update a project
 - `POST /projects/{project_id}/archive` - archive a project (owner/admin only)
@@ -49,8 +63,8 @@ so a project's existence isn't leaked to someone unauthorized to see it.
 - `POST /admin/projects/{project_id}/restore` - restore an archived project (owner/admin only)
 - `DELETE /admin/projects/{project_id}` - permanently purge an archived project (owner/admin only; deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, and Q&A history, and its on-disk storage directory)
 - `GET /projects/{project_id}/members` - list a project's collaborators
-- `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only)
-- `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user)
+- `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only; the collaborator must belong to the project's own tenant)
+- `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user in the project's own tenant)
 
 A project's optional `coordinate_reference_system` must be a projected CRS. `POST`/`PATCH` return `422` for a geographic (lat/lon degree) one, such as `EPSG:4326`, because every measurement the app performs is planar. A CRS that pyproj does not recognize, or none at all, is accepted and the project's coordinates are assumed to be planar already.
 
