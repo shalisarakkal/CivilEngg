@@ -87,10 +87,19 @@ site model, not against a file that has only been processed.
   the project, so past summaries remain available after generating a
   new one.
 - Asking a question routes anything computable — distance/setback, slope,
-  elevation, area, perimeter, or a directional question ("the setback to
-  the north property line") — to the deterministic calculation engine
-  first; anything else is answered from retrieved source text, or with an
-  explicit insufficient-data/ambiguous response rather than a guess.
+  elevation, area, perimeter, a directional question ("the setback to
+  the north property line"), a specific labeled spot elevation ("Where
+  is EL 102.5 located?" or the difference between two such labels), a
+  building's dimensions/orientation, a building's setback clearance from
+  the parcel boundary, a count of a classified feature ("How many
+  parking spaces are shown?"), or a drainage/utility presence question
+  — to the deterministic calculation engine first; anything else is
+  answered from retrieved source text, or with an explicit
+  insufficient-data/ambiguous response rather than a guess. Most of
+  these recognize a role in the question (parcel/property, building,
+  driveway, curb cut, utility easement, parking, tree, sidewalk,
+  detention basin) to pick the right entity when a site model has more
+  than one of a similar kind.
 - The AI layer is currently a deterministic mock that makes no network
   calls (see DECISIONS.md ADR-006) — answers are limited to what the
   site model and extracted text can actually support.

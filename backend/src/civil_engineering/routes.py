@@ -1239,16 +1239,35 @@ def create_site_model_revision(
 # Keyword vocabulary for semantic entity classification, matched against a DXF layer
 # name or an explicit CSV type/classification column (see RISK_REGISTER.md: inference
 # only from these signals, never guessed from geometry shape alone).
-PARCEL_TYPE_KEYWORDS = ("parcel", "property", "boundary")
+PARCEL_TYPE_KEYWORDS = ("parcel", "property", "boundary", "lot")
 BUILDING_TYPE_KEYWORDS = ("building", "footprint", "structure")
 DRIVEWAY_TYPE_KEYWORDS = ("driveway", "drive", "road", "street", "access")
 CURB_CUT_TYPE_KEYWORDS = ("curb cut", "curbcut")
+# PLAN.md Phase 14: keyword vocabulary for the site-feature roles TestQuestions asks
+# about that had no semantic_type at all before this. Same deterministic,
+# layer/type-column-only matching as the roles above (see RISK_REGISTER.md: never
+# guessed from geometry shape alone).
+UTILITY_EASEMENT_TYPE_KEYWORDS = ("easement",)
+PARKING_TYPE_KEYWORDS = ("parking",)
+TREE_TYPE_KEYWORDS = ("tree",)
+SIDEWALK_TYPE_KEYWORDS = ("sidewalk", "walkway")
+DETENTION_BASIN_TYPE_KEYWORDS = ("detention", "retention", "basin")
 
 
 def _semantic_type_from_text(text: str) -> str | None:
     lowered = text.lower()
     if any(keyword in lowered for keyword in CURB_CUT_TYPE_KEYWORDS):
         return "curb_cut"
+    if any(keyword in lowered for keyword in UTILITY_EASEMENT_TYPE_KEYWORDS):
+        return "utility_easement"
+    if any(keyword in lowered for keyword in DETENTION_BASIN_TYPE_KEYWORDS):
+        return "detention_basin"
+    if any(keyword in lowered for keyword in PARKING_TYPE_KEYWORDS):
+        return "parking"
+    if any(keyword in lowered for keyword in TREE_TYPE_KEYWORDS):
+        return "tree"
+    if any(keyword in lowered for keyword in SIDEWALK_TYPE_KEYWORDS):
+        return "sidewalk"
     if any(keyword in lowered for keyword in PARCEL_TYPE_KEYWORDS):
         return "parcel_boundary"
     if any(keyword in lowered for keyword in BUILDING_TYPE_KEYWORDS):

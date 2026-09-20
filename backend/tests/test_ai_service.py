@@ -86,7 +86,11 @@ def test_summary_intent_retrieves_and_sanitizes_source_text() -> None:
             "source_reference": {"file_name": "notes.txt"},
         }
     ]
-    answer = MockAIProvider().answer("Summarize the drainage plan", {"entities": entities})
+    # Not "Summarize the drainage plan": since PLAN.md Phase 14 wired the drainage/
+    # utility keyword rollups into the question endpoint, "drainage" now routes to its
+    # own intent instead of falling through to this generic summary/sanitization path
+    # (see test_drainage_and_utility_questions_are_routed_and_answered).
+    answer = MockAIProvider().answer("Summarize the site plan", {"entities": entities})
     assert answer["method"] == "source text retrieval"
     assert "[REDACTED" in answer["source_excerpts"][1]
     assert any("prompt-injection" in limitation for limitation in answer["limitations"])
@@ -149,6 +153,15 @@ def test_directional_question_routing_and_missing_role_handling() -> None:
     assert answer["confidence"] == 0.0
     assert "Insufficient data" in answer["answer"]
     assert "No parcel boundary entities" in answer["limitations"][0]
+
+
+def test_directional_parsing_does_not_misfire_on_east_as_a_word_fragment() -> None:
+    # Regression test found while adding PLAN.md Phase 14's setback-compliance
+    # intent: DIRECTION_AXES matched "east" as a bare substring, so any ordinary
+    # threshold phrase containing "at least" (e.g. "at least 25 ft") was
+    # misdetected as a compass-direction question.
+    assert route_question("Is the building's setback at least 25 ft?") != "directional_distance"
+    assert route_question("What is the distance to the northeast corner?") != "directional_distance"
 
 
 def test_summarize_reports_grading_drainage_utilities_and_attention_flags() -> None:

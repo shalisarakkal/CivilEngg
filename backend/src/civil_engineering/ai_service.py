@@ -4,12 +4,16 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import shapely
+from shapely.geometry import Polygon, shape
+
 from civil_engineering.calculations import (
     CalculationError,
     calculate_area,
     calculate_distance,
     calculate_perimeter,
     calculate_slope,
+    convert_distance,
 )
 from civil_engineering.site_model import is_geographic_crs
 
@@ -28,10 +32,14 @@ DIRECTION_AXES: dict[str, tuple[int, float]] = {
 
 # Question-language role -> the semantic_type classification it refers to (see
 # routes.py's _classify_entity). Longer, more specific phrases are not required to come
-# first: every synonym for a role maps to the same semantic_type.
+# first EXCEPT where a shorter phrase for one role is itself a substring of a longer
+# phrase for a *different* role (e.g. "lot" inside "parking lot") -- those pairs must
+# keep the more specific phrase earlier, since _question_role returns the first
+# substring match in insertion order. "lot" bare is deliberately last for this reason.
 ROLE_TO_SEMANTIC_TYPE = {
     "property line": "parcel_boundary",
     "property boundary": "parcel_boundary",
+    "property": "parcel_boundary",
     "parcel boundary": "parcel_boundary",
     "parcel": "parcel_boundary",
     "building footprint": "building_footprint",
@@ -40,13 +48,40 @@ ROLE_TO_SEMANTIC_TYPE = {
     "driveway": "driveway_road",
     "road": "driveway_road",
     "curb cut": "curb_cut",
+    # PLAN.md Phase 14: roles TestQuestions asks about that had no semantic_type or
+    # role phrase at all before this (see the matching keyword vocabulary in
+    # routes.py's _semantic_type_from_text).
+    "utility easement": "utility_easement",
+    "easement": "utility_easement",
+    "parking lot": "parking",
+    "parking space": "parking",
+    "parking": "parking",
+    "tree": "tree",
+    "sidewalk": "sidewalk",
+    "walkway": "sidewalk",
+    "detention basin": "detention_basin",
+    "retention basin": "detention_basin",
+    "detention pond": "detention_basin",
+    "basin": "detention_basin",
+    "lot": "parcel_boundary",
 }
 
 # Question intents answered by measuring positions on a plane. They need a projected
 # CRS to mean anything (see routes.py's PLANAR_CALCULATION_TYPES); "elevation" is left
 # out because it only summarizes z values, and "summary" is degraded with a flag rather
 # than refused, since most of what it reports is not a measurement.
-PLANAR_INTENTS = frozenset({"directional_distance", "distance", "slope", "area", "perimeter"})
+PLANAR_INTENTS = frozenset(
+    {
+        "directional_distance",
+        "distance",
+        "slope",
+        "area",
+        "perimeter",
+        "dimensions",
+        "orientation",
+        "setback_compliance",
+    }
+)
 
 GEOGRAPHIC_CRS_FLAG = (
     "Project coordinates are geographic (lat/lon degrees); distances, slopes, and "
@@ -101,6 +136,17 @@ def route_question(question: str) -> str:
     normalized = question.lower()
     if _parse_directional_question(question) is not None:
         return "directional_distance"
+    if _extract_el_tokens(question):
+        # More specific than the bare "elevation" catch below: the question names
+        # an actual labeled spot elevation (e.g. "EL 102.5"), so it can be answered
+        # by looking that label up rather than only reporting the overall range.
+        return "elevation_lookup"
+    if "setback" in normalized and _question_role(question) == "building_footprint":
+        # More specific than the generic setback/distance catch below: a question
+        # about whether *the building* meets its setbacks needs the building's
+        # actual clearance from the parcel boundary, not an arbitrary pair of
+        # "the only two mapped geometries in the model" (PLAN.md Phase 14).
+        return "setback_compliance"
     if "setback" in normalized or "distance" in normalized:
         return "distance"
     if "slope" in normalized:
@@ -111,6 +157,19 @@ def route_question(question: str) -> str:
         return "perimeter"
     if "area" in normalized:
         return "area"
+    if "how many" in normalized and _question_role(question) is not None:
+        return "count"
+    if "orientation" in normalized and _question_role(question) is not None:
+        return "orientation"
+    if (
+        any(keyword in normalized for keyword in ("dimensions", "width", "length"))
+        and _question_role(question) is not None
+    ):
+        return "dimensions"
+    if any(keyword in normalized for keyword in DRAINAGE_KEYWORDS):
+        return "drainage"
+    if any(keyword in normalized for keyword in UTILITY_KEYWORDS):
+        return "utility"
     return "summary"
 
 
@@ -122,9 +181,25 @@ def _question_role(question: str) -> str | None:
     return ROLE_TO_SEMANTIC_TYPE[role] if role is not None else None
 
 
+# A labeled spot elevation on a civil plan (e.g. "EL 102.5", "EL=101.0"). Deliberately
+# narrower than a bare number: plans use this specific convention (see TestQuestions),
+# so requiring the "EL" prefix avoids misrouting an ordinary elevation question that
+# happens to contain an unrelated number.
+_EL_TOKEN_PATTERN = re.compile(r"\bel\s*[:=]?\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def _extract_el_tokens(question: str) -> list[float]:
+    return [float(match) for match in _EL_TOKEN_PATTERN.findall(question)]
+
+
 def _parse_directional_question(question: str) -> tuple[str, str] | None:
     normalized = question.lower()
-    direction = next((word for word in DIRECTION_AXES if word in normalized), None)
+    # Word-boundary match, not a bare substring check: "east" is a substring of
+    # ordinary English words like "at least", which would otherwise misroute any
+    # threshold-style question ("at least 25 ft") as asking about compass east.
+    direction = next(
+        (word for word in DIRECTION_AXES if re.search(rf"\b{word}\b", normalized)), None
+    )
     if direction is None:
         return None
     semantic_type = _question_role(question)
@@ -207,6 +282,12 @@ def _entity_text(entity: dict[str, Any]) -> str:
             entity.get("entity_type", ""),
             source.get("layer") or "",
             properties.get("text", ""),
+            # PLAN.md Phase 14: a geometry entity's semantic_type (routes.py's
+            # _classify_entity) names its role even when the source layer/text
+            # doesn't literally contain a drainage/utility keyword -- e.g. a
+            # "detention_basin" polygon should surface in a drainage rollup
+            # regardless of what its CAD layer happens to be called.
+            properties.get("semantic_type", ""),
         )
     ).lower()
 
@@ -242,6 +323,37 @@ def _keyword_summary(entities: list[dict[str, Any]], keywords: tuple[str, ...], 
         }
     )
     return f"{len(matches)} {label}-related entities identified on: {', '.join(layers)}."
+
+
+def _answer_keyword_topic(
+    entities: list[dict[str, Any]], keywords: tuple[str, ...], label: str
+) -> dict[str, Any]:
+    """A question-answer version of _keyword_summary (PLAN.md Phase 14): the summary
+    endpoint already rolled drainage/utility entities up into a sentence, but the
+    question endpoint had no way to reach that rollup at all -- a question like "Is a
+    utility easement shown?" fell all the way through to the generic text fallback."""
+    matches = _keyword_matches(entities, keywords)
+    if not matches:
+        return _insufficient(f"No {label}-related entities were found in the extracted data.")
+    layers = sorted(
+        {
+            str((entity.get("source_reference") or {}).get("layer") or entity.get("entity_type"))
+            for entity in matches
+        }
+    )
+    return {
+        "answer": f"{len(matches)} {label}-related entities identified on: {', '.join(layers)}.",
+        "method": "keyword-matched entity retrieval",
+        "result": float(len(matches)),
+        "unit": "count",
+        "source_references": [entity.get("source_reference") for entity in matches],
+        "limitations": [
+            f"Identifies {label}-related entities by layer name, label text, type "
+            "column, or semantic classification keyword; a feature not named or "
+            "classified this way would not be found."
+        ],
+        "confidence": 0.6,
+    }
 
 
 def _attention_flags(entities: list[dict[str, Any]], warnings: list[str]) -> list[str]:
@@ -356,6 +468,41 @@ def _geometry_type_candidates(
     ]
 
 
+def _answer_count(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    """ "How many X are shown?" (PLAN.md Phase 14). Zero matches is reported as
+    insufficient data rather than an affirmative "none" -- semantic classification is
+    deterministic and keyword-based (see RISK_REGISTER.md), so an empty result could
+    just as easily mean the feature was never classified as that it's truly absent,
+    and this app never guesses which."""
+    role = _question_role(question)
+    if role is None:
+        return _insufficient("Could not identify which feature the question is counting.")
+    candidates = [
+        entity
+        for entity in entities
+        if entity.get("validation_status") == "valid"
+        and (entity.get("properties") or {}).get("semantic_type") == role
+    ]
+    role_label = role.replace("_", " ")
+    if not candidates:
+        return _insufficient(
+            f"No entities were classified as {role_label} in the extracted data; this may "
+            "mean none are shown, or that none were recognized from the source layer/type."
+        )
+    return {
+        "answer": f"{len(candidates)} {role_label} entities were found.",
+        "method": "deterministic entity count",
+        "result": float(len(candidates)),
+        "unit": "count",
+        "source_references": [entity.get("source_reference") for entity in candidates],
+        "limitations": [
+            "Counts only entities classified from a layer name, label text, or type "
+            "column; an unclassified feature of this kind would not be counted."
+        ],
+        "confidence": 0.8,
+    }
+
+
 def _answer_area(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
     # Area is a property of one closed shape, not a relationship between two
     # geometries -- unlike _answer_distance, this needs exactly one candidate.
@@ -434,6 +581,242 @@ def _answer_perimeter(question: str, entities: list[dict[str, Any]]) -> dict[str
         "source_references": [entity.get("source_reference")],
         "limitations": ["Assumes the geometry is measured in the requested output unit."],
         "confidence": 0.9,
+    }
+
+
+def _resolve_role_polygon(
+    question: str, entities: list[dict[str, Any]], purpose: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve exactly one polygon entity for dimension/orientation questions,
+    narrowed by the question's named role when it has one. Returns (entity, None) on
+    success, or (None, error_response) with the same insufficient/ambiguous shape
+    _answer_area/_answer_perimeter use (PLAN.md Phase 14)."""
+    role = _question_role(question)
+    candidates = _geometry_type_candidates(entities, {"Polygon", "MultiPolygon"})
+    if role is not None:
+        candidates = [
+            entity
+            for entity in candidates
+            if (entity.get("properties") or {}).get("semantic_type") == role
+        ]
+    role_label = f"{role.replace('_', ' ')} " if role is not None else ""
+    if not candidates:
+        return None, _insufficient(
+            f"No mapped {role_label}polygon geometry is available to measure {purpose}."
+        )
+    if len(candidates) > 1:
+        return None, _ambiguous(
+            candidates, f"Multiple mapped {role_label}polygons could define this {purpose}."
+        )
+    return candidates[0], None
+
+
+def _oriented_rectangle_sides(geometry_data: dict[str, Any]) -> tuple[float, float, float] | None:
+    """(width, length, orientation_degrees) of a polygon's minimum-area oriented
+    bounding rectangle, or None if the geometry isn't a polygon. width <= length by
+    definition; orientation is the compass bearing (0 = north, clockwise) of the
+    rectangle's long axis, reduced mod 180 since an axis (unlike a direction) has no
+    inherent sense."""
+    geometry = shape(geometry_data)
+    if geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+        return None
+    rectangle = shapely.oriented_envelope(geometry)
+    if not isinstance(rectangle, Polygon):
+        # A degenerate input (e.g. a near-zero-area sliver) can collapse to a
+        # Point or LineString instead of a rectangle; there's no width/length to
+        # report from that.
+        return None
+    coordinates = list(rectangle.exterior.coords)
+    if len(coordinates) < 4:
+        return None
+    first, second, third = coordinates[0], coordinates[1], coordinates[2]
+    side_a = math.hypot(second[0] - first[0], second[1] - first[1])
+    side_b = math.hypot(third[0] - second[0], third[1] - second[1])
+    width, length = min(side_a, side_b), max(side_a, side_b)
+    long_side = (first, second) if side_a >= side_b else (second, third)
+    dx = long_side[1][0] - long_side[0][0]
+    dy = long_side[1][1] - long_side[0][1]
+    orientation = math.degrees(math.atan2(dx, dy)) % 180
+    return width, length, orientation
+
+
+def _dimension_kind(question: str) -> str:
+    normalized = question.lower()
+    has_width = "width" in normalized
+    has_length = "length" in normalized
+    if has_width and not has_length:
+        return "width"
+    if has_length and not has_width:
+        return "length"
+    return "both"
+
+
+def _answer_dimensions(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    entity, error = _resolve_role_polygon(question, entities, "dimensions")
+    if error is not None:
+        return error
+    assert entity is not None
+    sides = _oriented_rectangle_sides(entity["geometry"])
+    if sides is None:
+        return _insufficient(
+            "The resolved geometry is not a polygon; dimensions require an enclosed shape."
+        )
+    width, length, orientation = sides
+    kind = _dimension_kind(question)
+    if kind == "width":
+        answer = f"The measured width (shorter side of the bounding rectangle) is {width:.3f} m."
+        result = width
+    elif kind == "length":
+        answer = f"The measured length (longer side of the bounding rectangle) is {length:.3f} m."
+        result = length
+    else:
+        answer = f"The measured dimensions are approximately {length:.3f} m by {width:.3f} m."
+        result = length
+    return {
+        "answer": answer,
+        "method": "deterministic minimum-area bounding-rectangle calculation",
+        "formula": "minimum-area oriented bounding rectangle of the polygon",
+        "result": result,
+        "unit": "m",
+        "width": width,
+        "length": length,
+        "orientation_degrees": orientation,
+        "source_references": [entity.get("source_reference")],
+        "limitations": [
+            "The bounding rectangle approximates the shape's footprint; an irregular "
+            "(non-rectangular) polygon's true width/length may differ.",
+            "Assumes the geometry is measured in metres.",
+        ],
+        "confidence": 0.8,
+    }
+
+
+def _answer_orientation(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    entity, error = _resolve_role_polygon(question, entities, "orientation")
+    if error is not None:
+        return error
+    assert entity is not None
+    sides = _oriented_rectangle_sides(entity["geometry"])
+    if sides is None:
+        return _insufficient(
+            "The resolved geometry is not a polygon; orientation requires an enclosed shape."
+        )
+    _width, _length, orientation = sides
+    return {
+        "answer": (
+            f"The shape's long axis is oriented approximately {orientation:.1f} degrees from north."
+        ),
+        "method": "deterministic minimum-area bounding-rectangle calculation",
+        "formula": "compass bearing of the long side of the polygon's oriented bounding rectangle",
+        "result": orientation,
+        "unit": "degrees",
+        "source_references": [entity.get("source_reference")],
+        "limitations": [
+            "The bounding rectangle approximates the shape's footprint; an irregular "
+            "(non-rectangular) polygon's true orientation may differ.",
+            "Reported as an axis (0-180 degrees), since a rectangle's long side has no "
+            "inherent direction.",
+        ],
+        "confidence": 0.75,
+    }
+
+
+# A required setback distance stated directly in the question (e.g. "at least 25 ft").
+# Requires an explicit unit so an unrelated number in the question (a year, a sheet
+# number) is never mistaken for one -- never guessed from anywhere else, since the
+# project has no general way to read a stated setback requirement back out of
+# extracted text (see RISK_REGISTER.md's key-phrase/label-linking limitations).
+_SETBACK_THRESHOLD_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(ft|feet|foot|m|meters?|metres?)\b", re.IGNORECASE
+)
+
+
+def _question_setback_threshold(question: str) -> tuple[float, str] | None:
+    match = _SETBACK_THRESHOLD_PATTERN.search(question)
+    if match is None:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    unit = "ft" if unit in ("ft", "feet", "foot") else "m"
+    return value, unit
+
+
+def _answer_setback_compliance(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether a building footprint clears the parcel boundary by at least a stated
+    setback (PLAN.md Phase 14), replacing the previous behavior of routing any
+    building-setback question to the generic "exactly two mapped geometries in the
+    whole model" distance answer, which collides in any site model with more than two
+    mapped geometries. Measures the actual clearance from the building's edge to the
+    property line (boundary-to-boundary, not polygon-to-polygon, since two nested
+    filled polygons are always "touching" and would otherwise measure zero)."""
+    buildings = [
+        entity
+        for entity in _geometry_type_candidates(entities, {"Polygon", "MultiPolygon"})
+        if (entity.get("properties") or {}).get("semantic_type") == "building_footprint"
+    ]
+    if not buildings:
+        return _insufficient("No mapped building footprint is available to check its setback.")
+    if len(buildings) > 1:
+        return _ambiguous(buildings, "Multiple mapped building footprints could be meant.")
+    parcels = [
+        entity
+        for entity in _geometry_type_candidates(entities, {"Polygon", "MultiPolygon"})
+        if (entity.get("properties") or {}).get("semantic_type") == "parcel_boundary"
+    ]
+    if not parcels:
+        return _insufficient(
+            "No mapped parcel boundary is available to measure the building's clearance against."
+        )
+    if len(parcels) > 1:
+        return _ambiguous(parcels, "Multiple mapped parcel boundaries could be meant.")
+    building_entity, parcel_entity = buildings[0], parcels[0]
+    clearance = shape(building_entity["geometry"]).boundary.distance(
+        shape(parcel_entity["geometry"]).boundary
+    )
+    source_references = [
+        building_entity.get("source_reference"),
+        parcel_entity.get("source_reference"),
+    ]
+    threshold = _question_setback_threshold(question)
+    if threshold is None:
+        return {
+            "answer": (
+                f"The building footprint is approximately {clearance:.3f} m from the parcel "
+                "boundary. No specific required setback distance was stated in the question, "
+                "so compliance cannot be determined automatically."
+            ),
+            "method": "deterministic geometry calculation",
+            "formula": "distance(building footprint boundary, parcel boundary)",
+            "result": clearance,
+            "unit": "m",
+            "source_references": source_references,
+            "limitations": [
+                "No required setback value was supplied in the question; only the "
+                "measured clearance is reported."
+            ],
+            "confidence": 0.75,
+        }
+    threshold_value, threshold_unit = threshold
+    threshold_meters = convert_distance(threshold_value, threshold_unit, "m")
+    compliant = clearance >= threshold_meters
+    return {
+        "answer": (
+            f"The building footprint is approximately {clearance:.3f} m from the parcel "
+            f"boundary, which is {'at least' if compliant else 'less than'} the stated "
+            f"{threshold_value:g} {threshold_unit} setback "
+            f"({'compliant' if compliant else 'not compliant'})."
+        ),
+        "method": "deterministic geometry calculation",
+        "formula": "distance(building footprint boundary, parcel boundary) >= stated setback",
+        "result": clearance,
+        "unit": "m",
+        "source_references": source_references,
+        "limitations": [
+            "Assumes the stated setback and the project's coordinates use compatible units.",
+            "Checks clearance from the parcel boundary itself; does not account for a "
+            "separate setback line that differs from the property line.",
+        ],
+        "confidence": 0.85,
     }
 
 
@@ -546,6 +929,97 @@ def _answer_elevation(entities: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _label_elevation_entities(entities: list[dict[str, Any]]) -> list[tuple[float, dict[str, Any]]]:
+    """(elevation_value, text_entity) for every plan label carrying an "EL <n>"-style
+    spot-elevation callout, extending the existing DXF label-to-geometry proximity
+    linking to elevation lookups specifically (PLAN.md Phase 14, RISK_REGISTER.md)."""
+    labeled: list[tuple[float, dict[str, Any]]] = []
+    for entity in entities:
+        if entity.get("entity_type") != "text":
+            continue
+        text = str((entity.get("properties") or {}).get("text", ""))
+        labeled.extend((float(value), entity) for value in _extract_el_tokens(text))
+    return labeled
+
+
+def _find_labeled_elevation(entities: list[dict[str, Any]], value: float) -> dict[str, Any] | None:
+    return next(
+        (
+            entity
+            for label_value, entity in _label_elevation_entities(entities)
+            if math.isclose(label_value, value, abs_tol=0.01)
+        ),
+        None,
+    )
+
+
+def _answer_elevation_lookup(question: str, entities: list[dict[str, Any]]) -> dict[str, Any]:
+    """A specific labeled spot elevation (e.g. "Where is EL 102.5 located?") or the
+    difference between two of them (e.g. "elevation difference between EL 102.5 and EL
+    101.0"), grounded in an actual matching plan label rather than trusting whatever
+    number the question happens to contain (PLAN.md Phase 14)."""
+    values = _extract_el_tokens(question)
+    if len(values) >= 2:
+        first_value, second_value = values[0], values[1]
+        first_label = _find_labeled_elevation(entities, first_value)
+        second_label = _find_labeled_elevation(entities, second_value)
+        missing = [
+            f"EL {value:g}"
+            for value, label in ((first_value, first_label), (second_value, second_label))
+            if label is None
+        ]
+        if missing:
+            return _insufficient(
+                f"No plan label matching {' and '.join(missing)} was found in the extracted data."
+            )
+        assert first_label is not None and second_label is not None
+        difference = abs(first_value - second_value)
+        return {
+            "answer": (
+                f"The elevation difference between EL {first_value:g} and EL {second_value:g} "
+                f"is {difference:.2f}."
+            ),
+            "method": "deterministic label lookup",
+            "formula": "abs(first labeled elevation - second labeled elevation)",
+            "result": difference,
+            "source_references": [
+                first_label.get("source_reference"),
+                second_label.get("source_reference"),
+            ],
+            "limitations": [
+                "Assumes both labels share the same unit and vertical datum.",
+                "The value comes from the plan label text itself, not a separately "
+                "surveyed measurement.",
+            ],
+            "confidence": 0.85,
+        }
+    if len(values) == 1:
+        target = values[0]
+        label = _find_labeled_elevation(entities, target)
+        if label is None:
+            return _insufficient(
+                f"No plan label matching 'EL {target:g}' was found in the extracted data."
+            )
+        location = (label.get("properties") or {}).get("location")
+        located_at = (
+            f"at coordinates ({location[0]:.2f}, {location[1]:.2f})"
+            if isinstance(location, list) and len(location) >= 2
+            else "at an unrecorded location"
+        )
+        return {
+            "answer": f"EL {target:g} is labeled {located_at}.",
+            "method": "source-grounded label lookup",
+            "result": target,
+            "location": location,
+            "source_references": [label.get("source_reference")],
+            "limitations": ["Location is the plan label's position, not a surveyed coordinate."],
+            "confidence": 0.85,
+        }
+    return _insufficient(
+        "Could not identify a labeled elevation value (e.g. 'EL 102.5') in the question."
+    )
+
+
 def _answer_summary(entities: list[dict[str, Any]]) -> dict[str, Any]:
     text_entities = [entity for entity in entities if entity.get("entity_type") == "text"]
     excerpts: list[str] = []
@@ -607,12 +1081,26 @@ class MockAIProvider:
             return _answer_directional(question, entities)
         if intent == "distance":
             return _answer_distance(_comparable_geometries(entities))
+        if intent == "setback_compliance":
+            return _answer_setback_compliance(question, entities)
         if intent == "slope":
             return _answer_slope(entities)
+        if intent == "elevation_lookup":
+            return _answer_elevation_lookup(question, entities)
         if intent == "elevation":
             return _answer_elevation(entities)
         if intent == "area":
             return _answer_area(question, entities)
         if intent == "perimeter":
             return _answer_perimeter(question, entities)
+        if intent == "count":
+            return _answer_count(question, entities)
+        if intent == "orientation":
+            return _answer_orientation(question, entities)
+        if intent == "dimensions":
+            return _answer_dimensions(question, entities)
+        if intent == "drainage":
+            return _answer_keyword_topic(entities, DRAINAGE_KEYWORDS, "drainage")
+        if intent == "utility":
+            return _answer_keyword_topic(entities, UTILITY_KEYWORDS, "utility")
         return _answer_summary(entities)

@@ -117,6 +117,8 @@ Summaries are persisted server-side and listable (above). There is no list route
 
 The current implementation uses a deterministic mock provider. Unsupported questions return insufficient-data responses rather than invented engineering facts.
 
+Recognized question intents (`route_question` in `ai_service.py`), each resolved deterministically from the extracted site model rather than generated: `directional_distance`, `distance`/`setback`, `slope`, `elevation`, `elevation_lookup` (a specific labeled spot elevation, e.g. "EL 102.5", or the difference between two), `perimeter`, `area`, `dimensions`/`orientation` (a polygon's width/length/compass-axis orientation via its minimum-area oriented bounding rectangle), `setback_compliance` (a building's clearance from its parcel boundary, compared against an explicit numeric setback in the question if one is given), `count` (how many entities carry a given role), `drainage`/`utility` (keyword-matched entity presence), and a `summary` fallback that retrieves relevant extracted text. Role-aware intents (`area`, `perimeter`, `dimensions`, `orientation`, `setback_compliance`, `count`, `directional_distance`) recognize `parcel_boundary`/`building_footprint`/`driveway_road`/`curb_cut`/`utility_easement`/`parking`/`tree`/`sidewalk`/`detention_basin` role phrases (PLAN.md Phase 14); a question naming no role considers every candidate of the right geometry type, which is ambiguous rather than answered once more than one exists.
+
 ## Kinds of Error Condition
 
 These are not literal error codes (see Conventions above) — just the situations the API distinguishes, and how each currently surfaces:
