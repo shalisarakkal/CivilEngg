@@ -147,13 +147,19 @@ site model, not against a file that has only been processed.
 - Uploading a file that duplicates one already in the project (by
   content, not just name) is detected and rejected, including against
   archived files.
-- "Add collaborator" (project owner or Admin) supports adding several
-  people at once: an Admin sees a checklist of every eligible User/Power
-  User in the organization (already-added collaborators, the owner, and
+- "Manage collaborators" (project owner or Admin) is one panel for
+  everything about who's on a project: it lists the owner and every
+  current collaborator (with a "Remove" button on each), lets you add
+  new ones, and reassign the owner — all from the same place, replacing
+  what used to be two separate actions. Adding supports several people
+  at once: an Admin sees a checklist of every eligible User/Power User
+  in the organization (already-added collaborators, the owner, and
   disabled accounts are excluded automatically) and can select as many
   as needed before submitting. A Power User project owner instead adds
   one person at a time by exact username — the organization's full user
-  list isn't visible to a non-Admin account.
+  list isn't visible to a non-Admin account. Reassigning the owner
+  (to an existing Power User collaborator) always requires an explicit
+  confirmation step before it takes effect.
 
 ## Known limitations
 

@@ -991,7 +991,7 @@ test.describe("project workspace", () => {
     await expect.poll(() => uploadedNames).toEqual(["a.csv", "b.csv"]);
   });
 
-  test("Add collaborator falls back to a single-username lookup when the caller can't list every user (Power User owner)", async ({
+  test("Manage collaborators falls back to a single-username lookup when the caller can't list every user (Power User owner)", async ({
     page,
   }) => {
     // GET /users is admin-only; a Power User project owner (who can also
@@ -1014,16 +1014,88 @@ test.describe("project workspace", () => {
 
     await page.goto("/");
     await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
-    await page.getByRole("button", { name: "Add collaborator" }).click();
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
 
+    // GET /users failing means the owner's own name is resolved locally
+    // (the caller IS the owner here), not looked up.
+    await expect(page.locator(".collaborator-owner-row")).toContainText(MOCK_CURRENT_USER.username);
     await expect(page.locator(".collaborator-candidate-list")).toHaveCount(0);
     const usernameInput = page.locator("#new-collaborator-username");
     await expect(usernameInput).toBeVisible();
     await usernameInput.fill("jsmith");
-    await page.getByRole("button", { name: "Add collaborator" }).nth(1).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
 
     await expect(page.getByText("jsmith was added to Oak Street Site.")).toBeVisible();
     expect(postBody).toEqual({ user_id: "found-user-id" });
+  });
+
+  test("Manage collaborators lets the owner remove an existing collaborator", async ({ page }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
+    let deleteCalled = false;
+    await page.route(`${API}/projects/${PROJECT.id}/members`, (route) =>
+      json(route, [
+        {
+          id: "membership-1",
+          project_id: PROJECT.id,
+          user_id: "collab-1",
+          username: "jsmith",
+          role: "user",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ]),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/members/collab-1`, (route) => {
+      deleteCalled = true;
+      return route.fulfill({ status: 204 });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
+
+    await expect(page.getByText("Collaborators (1)")).toBeVisible();
+    await page.getByRole("button", { name: "Remove" }).click();
+
+    await expect(page.getByText("jsmith was removed from Oak Street Site.")).toBeVisible();
+    expect(deleteCalled).toBe(true);
+  });
+
+  test("Manage collaborators reassigns the owner with an explicit confirmation step", async ({
+    page,
+  }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
+    await page.route(`${API}/projects/${PROJECT.id}/members`, (route) =>
+      json(route, [
+        {
+          id: "membership-1",
+          project_id: PROJECT.id,
+          user_id: "collab-1",
+          username: "pu_jane",
+          role: "power_user",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ]),
+    );
+    let patchBody: unknown = null;
+    await page.route(`${API}/projects/${PROJECT.id}/owner`, async (route) => {
+      patchBody = route.request().postDataJSON();
+      return json(route, { ...PROJECT, owner_id: "collab-1" });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
+    await page.getByLabel("Reassign owner to").selectOption("collab-1");
+
+    // Reassignment requires an explicit confirmation, not an immediate
+    // change on selecting a candidate.
+    await expect(page.getByText("Make pu_jane the new owner of Oak Street Site?")).toBeVisible();
+    expect(patchBody).toBeNull();
+
+    await page.getByRole("button", { name: "Confirm reassign" }).click();
+
+    await expect(page.getByText("Oak Street Site's owner was changed to pu_jane.")).toBeVisible();
+    expect(patchBody).toEqual({ owner_id: "collab-1" });
   });
 });
 
@@ -1138,7 +1210,7 @@ test.describe("project workspace as admin", () => {
     ).toBeVisible();
   });
 
-  test("Add collaborator supports multi-select, adding several collaborators in one go", async ({
+  test("Manage collaborators supports multi-select, adding several collaborators in one go", async ({
     page,
   }) => {
     await mockBaseline(page, [PROJECT]);
@@ -1177,9 +1249,15 @@ test.describe("project workspace as admin", () => {
 
     await page.goto("/");
     await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
-    await page.getByRole("button", { name: "Add collaborator" }).click();
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
 
-    const list = page.locator(".collaborator-candidate-list");
+    // The owner's name is resolved from GET /users since the admin caller
+    // isn't the owner themselves.
+    await expect(page.locator(".collaborator-owner-row")).toContainText("owner_user");
+    await expect(page.getByText("Collaborators (1)")).toBeVisible();
+    await expect(page.locator(".existing-collaborator-list")).toContainText("existing_member");
+
+    const list = page.locator(".collaborator-candidate-list:not(.existing-collaborator-list)");
     // Only jsmith and pu_jane are eligible: owner_user is the owner,
     // existing_member is already a collaborator, disabled_user is disabled,
     // and another_admin isn't a User/Power User.

@@ -284,9 +284,6 @@ export default function ProjectWorkspace() {
   const [apiStatus, setApiStatus] = useState<{ ok: boolean; environment?: string } | null>(null);
   const [projectPendingArchive, setProjectPendingArchive] = useState<Project | null>(null);
   const [projectPendingPurge, setProjectPendingPurge] = useState<Project | null>(null);
-  const [ownerReassignProject, setOwnerReassignProject] = useState<Project | null>(null);
-  const [ownerReassignCandidates, setOwnerReassignCandidates] = useState<ProjectMember[]>([]);
-  const [newOwnerId, setNewOwnerId] = useState("");
   // An admin has no project of their own to auto-become owner of (only a
   // power_user does -- routes.py's create_project), so creating a project
   // as admin requires explicitly naming an existing power_user as owner_id.
@@ -295,19 +292,28 @@ export default function ProjectWorkspace() {
     [],
   );
   const [newProjectOwnerId, setNewProjectOwnerId] = useState("");
-  const [reassigningOwner, setReassigningOwner] = useState(false);
-  const [addCollaboratorProject, setAddCollaboratorProject] = useState<Project | null>(null);
+  // "Manage collaborators" consolidates what used to be two separate
+  // actions (Add collaborator, Reassign owner) into one panel: the owner,
+  // every existing collaborator (with remove), an add-candidate checklist,
+  // and an inline reassign-owner control with its own confirmation step.
+  const [manageCollaboratorsProject, setManageCollaboratorsProject] = useState<Project | null>(null);
+  const [existingCollaborators, setExistingCollaborators] = useState<ProjectMember[]>([]);
+  const [ownerUsername, setOwnerUsername] = useState<string | null>(null);
   const [newCollaboratorUsername, setNewCollaboratorUsername] = useState("");
   const [addingCollaborator, setAddingCollaborator] = useState(false);
-  // Multi-select candidate list, built from GET /users -- admin-only, so a
-  // Power User project owner (who can also open this modal, but has no API
-  // access to list every user) falls back to the single-username lookup
-  // flow above instead when this fetch 403s.
+  const [removingCollaboratorId, setRemovingCollaboratorId] = useState<string | null>(null);
+  // Multi-select add-candidate list, built from GET /users -- admin-only, so
+  // a Power User project owner (who can also open this modal, but has no
+  // API access to list every user) falls back to the single-username lookup
+  // flow instead when this fetch 403s.
   const [collaboratorCandidates, setCollaboratorCandidates] = useState<
     { id: string; username: string; role: string }[]
   >([]);
   const [selectedCollaboratorIds, setSelectedCollaboratorIds] = useState<Set<string>>(new Set());
   const [collaboratorListUnavailable, setCollaboratorListUnavailable] = useState(false);
+  const [reassignCandidateId, setReassignCandidateId] = useState("");
+  const [reassignTarget, setReassignTarget] = useState<{ id: string; username: string } | null>(null);
+  const [reassigningOwner, setReassigningOwner] = useState(false);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [calculations, setCalculations] = useState<Calculation[]>([]);
@@ -523,71 +529,57 @@ export default function ProjectWorkspace() {
     }
   }
 
-  async function openOwnerReassign(project: Project) {
-    setNewOwnerId("");
-    setOwnerReassignCandidates([]);
-    setOwnerReassignProject(project);
-    const response = await apiFetch(`${apiUrl}/projects/${project.id}/members`);
-    if (response.ok) {
-      const members: ProjectMember[] = await response.json();
-      setOwnerReassignCandidates(members.filter((member) => member.role === "power_user"));
-    }
-  }
-
-  async function confirmReassignOwner(event: FormEvent) {
-    event.preventDefault();
-    if (!ownerReassignProject || !newOwnerId) return;
-    const project = ownerReassignProject;
-    setReassigningOwner(true);
-    try {
-      const response = await apiFetch(`${apiUrl}/projects/${project.id}/owner`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner_id: newOwnerId }),
-      });
-      if (response.ok) {
-        const updated: Project = await response.json();
-        setProjects(projects.map((item) => (item.id === updated.id ? updated : item)));
-        if (selectedProject?.id === updated.id) setSelectedProject(updated);
-        setMessage(`${project.name}'s owner was changed.`);
-        setOwnerReassignProject(null);
-      } else {
-        const body = await response.json().catch(() => null);
-        setMessage(errorMessage(body, "Could not change the project owner."));
-      }
-    } finally {
-      setReassigningOwner(false);
-    }
-  }
-
-  async function openAddCollaborator(project: Project) {
-    setNewCollaboratorUsername("");
-    setSelectedCollaboratorIds(new Set());
-    setCollaboratorCandidates([]);
-    setCollaboratorListUnavailable(false);
-    setAddCollaboratorProject(project);
+  // Fetches the current member list and (admin-only) add-candidates without
+  // resetting the rest of the modal's state -- called after opening it, and
+  // again after any add/remove/reassign, so "Manage collaborators" stays
+  // open and up to date rather than closing after a single action.
+  async function loadCollaboratorLists(project: Project) {
     const [usersResponse, membersResponse] = await Promise.all([
       apiFetch(`${apiUrl}/users`),
       apiFetch(`${apiUrl}/projects/${project.id}/members`),
     ]);
+    const members: ProjectMember[] = membersResponse.ok ? await membersResponse.json() : [];
+    setExistingCollaborators(members);
     if (!usersResponse.ok) {
       // GET /users is admin-only -- a Power User project owner (who can
-      // also open this modal) gets a 403 here, so fall back to the
-      // single-username lookup form below instead of an empty list.
+      // also open this modal) gets a 403 here, so the add section falls
+      // back to a single-username lookup instead of an empty list. The
+      // owner is always either the caller themselves or, if not, the
+      // caller is an admin (the only other role that can open this modal),
+      // so this fallback never needs to display an unresolved owner name.
       setCollaboratorListUnavailable(true);
+      setOwnerUsername(currentUser.id === project.owner_id ? currentUser.username : null);
       return;
     }
+    setCollaboratorListUnavailable(false);
     const allUsers: { id: string; username: string; role: string; disabled_at: string | null }[] =
       await usersResponse.json();
-    const existingMembers: ProjectMember[] = membersResponse.ok ? await membersResponse.json() : [];
-    const existingMemberIds = new Set(existingMembers.map((member) => member.user_id));
+    setOwnerUsername(
+      currentUser.id === project.owner_id
+        ? currentUser.username
+        : (allUsers.find((user) => user.id === project.owner_id)?.username ?? null),
+    );
+    const memberIds = new Set(members.map((member) => member.user_id));
     setCollaboratorCandidates(
       allUsers
         .filter((user) => user.role === "user" || user.role === "power_user")
         .filter((user) => user.disabled_at === null)
-        .filter((user) => user.id !== project.owner_id && !existingMemberIds.has(user.id))
+        .filter((user) => user.id !== project.owner_id && !memberIds.has(user.id))
         .map((user) => ({ id: user.id, username: user.username, role: user.role })),
     );
+  }
+
+  async function openManageCollaborators(project: Project) {
+    setManageCollaboratorsProject(project);
+    setNewCollaboratorUsername("");
+    setSelectedCollaboratorIds(new Set());
+    setCollaboratorCandidates([]);
+    setCollaboratorListUnavailable(false);
+    setExistingCollaborators([]);
+    setOwnerUsername(null);
+    setReassignCandidateId("");
+    setReassignTarget(null);
+    await loadCollaboratorLists(project);
   }
 
   function toggleCollaboratorCandidate(id: string) {
@@ -601,8 +593,8 @@ export default function ProjectWorkspace() {
 
   async function confirmAddCollaborators(event: FormEvent) {
     event.preventDefault();
-    if (!addCollaboratorProject || selectedCollaboratorIds.size === 0) return;
-    const project = addCollaboratorProject;
+    if (!manageCollaboratorsProject || selectedCollaboratorIds.size === 0) return;
+    const project = manageCollaboratorsProject;
     const targets = collaboratorCandidates.filter((candidate) => selectedCollaboratorIds.has(candidate.id));
     setAddingCollaborator(true);
     try {
@@ -627,8 +619,8 @@ export default function ProjectWorkspace() {
         }),
       );
       setMessage(summarizeCollaboratorResults(results), results.length > 1 ? results : null, "Added");
-      setAddCollaboratorProject(null);
       setSelectedCollaboratorIds(new Set());
+      await loadCollaboratorLists(project);
     } finally {
       setAddingCollaborator(false);
     }
@@ -636,8 +628,8 @@ export default function ProjectWorkspace() {
 
   async function confirmAddCollaborator(event: FormEvent) {
     event.preventDefault();
-    if (!addCollaboratorProject || !newCollaboratorUsername.trim()) return;
-    const project = addCollaboratorProject;
+    if (!manageCollaboratorsProject || !newCollaboratorUsername.trim()) return;
+    const project = manageCollaboratorsProject;
     setAddingCollaborator(true);
     try {
       const lookup = await apiFetch(
@@ -656,14 +648,73 @@ export default function ProjectWorkspace() {
       });
       if (response.ok) {
         setMessage(`${found.username} was added to ${project.name}.`);
-        setAddCollaboratorProject(null);
         setNewCollaboratorUsername("");
+        await loadCollaboratorLists(project);
       } else {
         const body = await response.json().catch(() => null);
         setMessage(errorMessage(body, "Could not add that collaborator."));
       }
     } finally {
       setAddingCollaborator(false);
+    }
+  }
+
+  async function removeCollaborator(member: ProjectMember) {
+    if (!manageCollaboratorsProject || removingCollaboratorId !== null) return;
+    const project = manageCollaboratorsProject;
+    setRemovingCollaboratorId(member.user_id);
+    try {
+      const response = await apiFetch(`${apiUrl}/projects/${project.id}/members/${member.user_id}`, {
+        method: "DELETE",
+      });
+      if (response.ok || response.status === 404) {
+        setMessage(`${member.username} was removed from ${project.name}.`);
+        await loadCollaboratorLists(project);
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Could not remove that collaborator."));
+      }
+    } finally {
+      setRemovingCollaboratorId(null);
+    }
+  }
+
+  function pickReassignCandidate(userId: string) {
+    setReassignCandidateId(userId);
+    const candidate = existingCollaborators.find((member) => member.user_id === userId);
+    setReassignTarget(candidate ? { id: candidate.user_id, username: candidate.username } : null);
+  }
+
+  function cancelReassign() {
+    setReassignCandidateId("");
+    setReassignTarget(null);
+  }
+
+  async function confirmReassignOwner() {
+    if (!manageCollaboratorsProject || !reassignTarget) return;
+    const project = manageCollaboratorsProject;
+    setReassigningOwner(true);
+    try {
+      const response = await apiFetch(`${apiUrl}/projects/${project.id}/owner`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner_id: reassignTarget.id }),
+      });
+      if (response.ok) {
+        const updated: Project = await response.json();
+        setProjects(projects.map((item) => (item.id === updated.id ? updated : item)));
+        if (selectedProject?.id === updated.id) setSelectedProject(updated);
+        setMessage(`${project.name}'s owner was changed to ${reassignTarget.username}.`);
+        setManageCollaboratorsProject(updated);
+        setReassignCandidateId("");
+        setReassignTarget(null);
+        await loadCollaboratorLists(updated);
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Could not change the project owner."));
+      }
+    } finally {
+      setReassigningOwner(false);
     }
   }
 
@@ -1573,7 +1624,7 @@ export default function ProjectWorkspace() {
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
-            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><div style={{ display: "flex", gap: 12 }}>{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openAddCollaborator(selectedProject)}>Add collaborator</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openOwnerReassign(selectedProject)}>Reassign owner</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button>}</div></div>
+            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><div style={{ display: "flex", gap: 12 }}>{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openManageCollaborators(selectedProject)}>Manage collaborators</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button>}</div></div>
             <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" disabled={uploading} onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><div className="upload-form-actions"><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button>{pendingFiles.length > 0 && <button type="button" className="secondary-button" disabled={loading} onClick={cancelFileSelection}>Cancel</button>}</div></form></div>
             <div className="file-list">
               <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
@@ -1603,105 +1654,166 @@ export default function ProjectWorkspace() {
         </section>
       </section>
       {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive, along with everything in it — its files, revisions, calculations, summaries, and questions become inaccessible until you restore it. Nothing is deleted; restoring brings it all back exactly as it was.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}
-      {addCollaboratorProject && (
+      {manageCollaboratorsProject && (
         <div className="modal-backdrop" role="presentation">
           <section
             className="confirm-modal"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="add-collaborator-title"
+            aria-labelledby="manage-collaborators-title"
           >
-            <p className="eyebrow">Add collaborator</p>
-            <h3 id="add-collaborator-title">Add collaborators to {addCollaboratorProject.name}?</h3>
-            <p className="muted">
-              They get full working access (upload, process, calculate, ask questions); a Power
-              User also gets archive/purge rights.
-            </p>
-            {collaboratorListUnavailable ? (
-              // GET /users is admin-only -- a Power User project owner has
-              // no API access to list every user, so falls back to the
-              // original one-at-a-time lookup instead of an empty list.
-              <form onSubmit={confirmAddCollaborator}>
-                <label htmlFor="new-collaborator-username">Username</label>
-                <input
-                  id="new-collaborator-username"
-                  value={newCollaboratorUsername}
-                  onChange={(event) => setNewCollaboratorUsername(event.target.value)}
-                  required
-                  autoFocus
-                />
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={addingCollaborator}
-                    onClick={() => setAddCollaboratorProject(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="danger-button"
-                    disabled={addingCollaborator || !newCollaboratorUsername.trim()}
-                  >
-                    {addingCollaborator ? "Adding..." : "Add collaborator"}
-                  </button>
-                </div>
-              </form>
-            ) : collaboratorCandidates.length === 0 ? (
+            <p className="eyebrow">Manage collaborators</p>
+            <h3 id="manage-collaborators-title">{manageCollaboratorsProject.name}</h3>
+
+            {reassignTarget ? (
               <>
                 <p className="muted">
-                  No eligible users to add — everyone active is already a collaborator, is the
-                  owner, or has no User/Power User account.
+                  Make {reassignTarget.username} the new owner of {manageCollaboratorsProject.name}?{" "}
+                  {ownerUsername ?? "The current owner"} keeps their own access unless removed
+                  separately.
                 </p>
                 <div className="modal-actions">
                   <button
                     type="button"
                     className="secondary-button"
-                    onClick={() => setAddCollaboratorProject(null)}
+                    disabled={reassigningOwner}
+                    onClick={cancelReassign}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    disabled={reassigningOwner}
+                    onClick={() => void confirmReassignOwner()}
+                  >
+                    {reassigningOwner ? "Changing..." : "Confirm reassign"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="collaborator-owner-row">
+                  <strong>Owner</strong>
+                  <span>{ownerUsername ?? "Unknown"}</span>
+                  {existingCollaborators.some((member) => member.role === "power_user") ? (
+                    <select
+                      aria-label="Reassign owner to"
+                      value={reassignCandidateId}
+                      onChange={(event) => pickReassignCandidate(event.target.value)}
+                    >
+                      <option value="" disabled>
+                        Reassign to...
+                      </option>
+                      {existingCollaborators
+                        .filter((member) => member.role === "power_user")
+                        .map((member) => (
+                          <option key={member.user_id} value={member.user_id}>
+                            {member.username}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <small className="muted">No Power User collaborators to reassign to</small>
+                  )}
+                </div>
+
+                <p className="eyebrow">Collaborators ({existingCollaborators.length})</p>
+                {existingCollaborators.length === 0 ? (
+                  <p className="muted">No collaborators yet.</p>
+                ) : (
+                  <ul className="collaborator-candidate-list existing-collaborator-list">
+                    {existingCollaborators.map((member) => (
+                      <li key={member.id}>
+                        <span>{member.username}</span>
+                        <small>{member.role.replace("_", " ")}</small>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={removingCollaboratorId === member.user_id}
+                          onClick={() => void removeCollaborator(member)}
+                        >
+                          {removingCollaboratorId === member.user_id ? "Removing..." : "Remove"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <p className="eyebrow">Add collaborators</p>
+                {collaboratorListUnavailable ? (
+                  // GET /users is admin-only -- a Power User project owner
+                  // has no API access to list every user, so falls back to
+                  // a one-at-a-time lookup instead of an empty list.
+                  <form onSubmit={confirmAddCollaborator}>
+                    <label htmlFor="new-collaborator-username">Username</label>
+                    <div className="input-row">
+                      <input
+                        id="new-collaborator-username"
+                        value={newCollaboratorUsername}
+                        onChange={(event) => setNewCollaboratorUsername(event.target.value)}
+                        required
+                        autoFocus
+                      />
+                      <button
+                        type="submit"
+                        className="secondary-button"
+                        disabled={addingCollaborator || !newCollaboratorUsername.trim()}
+                      >
+                        {addingCollaborator ? "Adding..." : "Add"}
+                      </button>
+                    </div>
+                  </form>
+                ) : collaboratorCandidates.length === 0 ? (
+                  <p className="muted">
+                    No eligible users to add — everyone active is already a collaborator, is the
+                    owner, or has no User/Power User account.
+                  </p>
+                ) : (
+                  <form onSubmit={confirmAddCollaborators}>
+                    <ul className="collaborator-candidate-list">
+                      {collaboratorCandidates.map((candidate) => (
+                        <li key={candidate.id}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedCollaboratorIds.has(candidate.id)}
+                              onChange={() => toggleCollaboratorCandidate(candidate.id)}
+                            />
+                            <span>{candidate.username}</span>
+                            <small>{candidate.role.replace("_", " ")}</small>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="modal-actions">
+                      <button
+                        type="submit"
+                        className="secondary-button"
+                        disabled={addingCollaborator || selectedCollaboratorIds.size === 0}
+                      >
+                        {addingCollaborator
+                          ? "Adding..."
+                          : `Add ${selectedCollaboratorIds.size || ""} collaborator${selectedCollaboratorIds.size === 1 ? "" : "s"}`}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setManageCollaboratorsProject(null)}
                   >
                     Close
                   </button>
                 </div>
               </>
-            ) : (
-              <form onSubmit={confirmAddCollaborators}>
-                <ul className="collaborator-candidate-list">
-                  {collaboratorCandidates.map((candidate) => (
-                    <li key={candidate.id}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={selectedCollaboratorIds.has(candidate.id)}
-                          onChange={() => toggleCollaboratorCandidate(candidate.id)}
-                        />
-                        <span>{candidate.username}</span>
-                        <small>{candidate.role.replace("_", " ")}</small>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={addingCollaborator}
-                    onClick={() => setAddCollaboratorProject(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="danger-button" disabled={addingCollaborator || selectedCollaboratorIds.size === 0}>
-                    {addingCollaborator
-                      ? "Adding..."
-                      : `Add ${selectedCollaboratorIds.size || ""} collaborator${selectedCollaboratorIds.size === 1 ? "" : "s"}`}
-                  </button>
-                </div>
-              </form>
             )}
           </section>
         </div>
       )}
-      {ownerReassignProject && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="owner-reassign-title"><p className="eyebrow">Reassign owner</p><h3 id="owner-reassign-title">Change the owner of {ownerReassignProject.name}?</h3><p className="muted">The new owner must be a Power User already collaborating on this project. Ownership moves to them immediately; you keep your own access unless removed separately.</p>{ownerReassignCandidates.length === 0 ? <p className="muted">No Power User collaborators on this project yet — use &quot;Add collaborator&quot; first.</p> : <form onSubmit={confirmReassignOwner}><label htmlFor="new-owner">New owner</label><select id="new-owner" value={newOwnerId} onChange={(event) => setNewOwnerId(event.target.value)} required><option value="" disabled>Choose a Power User</option>{ownerReassignCandidates.map((member) => <option key={member.user_id} value={member.user_id}>{member.username}</option>)}</select><div className="modal-actions"><button type="button" className="secondary-button" disabled={reassigningOwner} onClick={() => setOwnerReassignProject(null)}>Cancel</button><button type="submit" className="danger-button" disabled={reassigningOwner || !newOwnerId}>{reassigningOwner ? "Changing..." : "Change owner"}</button></div></form>}{ownerReassignCandidates.length === 0 && <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setOwnerReassignProject(null)}>Close</button></div>}</section></div>}
       {projectPendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="project-purge-title">Permanently delete {projectPendingPurge.name}?</h3><p className="muted">This removes the project, all its files, revisions, calculations, summaries, and questions, and its on-disk storage — permanently. This cannot be undone.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => setProjectPendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => void confirmPurgeArchivedProject()}>{busyAction === `project-purge:${projectPendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
       {archivedFilesPendingBatchPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="batch-purge-title">Permanently delete {archivedFilesPendingBatchPurge.length} file{archivedFilesPendingBatchPurge.length === 1 ? "" : "s"}?</h3><p className="muted">{archivedFilesPendingBatchPurge.map((file) => file.original_name).join(", ")}</p><p className="muted">This removes each archived file and its metadata. Accepted revisions and calculations remain, but the original sources cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchPurgeArchivedFiles()}>{batchBusy === "purge" ? "Purging..." : "Permanently delete"}</button></div></section></div>}
     </main>
