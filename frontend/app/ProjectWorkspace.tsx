@@ -85,12 +85,36 @@ function fileTypeGroup(name: string): string {
 
 type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number; skipped?: boolean };
 
-// Phase 12: every setMessage() call also becomes one of these, kept for the
-// life of the browser tab (not persisted -- a reload starts a fresh log).
-// This is what actually fixes the reported bug: a later action's status no
-// longer erases an earlier one's, since both remain visible in the log
-// instead of only the single most recent line.
+// Phase 12: every setMessage() call also becomes one of these. This is what
+// actually fixes the reported bug: a later action's status no longer
+// erases an earlier one's, since both remain visible in the log instead of
+// only the single most recent line. Kept locally for instant, no-round-trip
+// feedback; also persisted server-side (POST/GET .../activity-events) when
+// a project is selected, so the history survives a reload and is visible
+// to any other member of the project -- an actual audit trail, not just a
+// per-tab convenience. Before a project exists (e.g. "Ready for your first
+// project.", a failed project-list load), there's nothing to attach it to,
+// so it stays local-only, same as before persistence existed.
 type ActivityEvent = { id: string; timestamp: number; text: string; details: BatchResult[] | null; successLabel: string };
+
+// The shape ActivityEventResponse (schemas.py) actually returns.
+type PersistedActivityEvent = {
+  id: string;
+  text: string;
+  details: BatchResult[] | null;
+  success_label: string;
+  created_at: string;
+};
+
+function activityEventFromPersisted(event: PersistedActivityEvent): ActivityEvent {
+  return {
+    id: event.id,
+    timestamp: new Date(event.created_at).getTime(),
+    text: event.text,
+    details: event.details,
+    successLabel: event.success_label,
+  };
+}
 
 const ACTIVITY_LOG_LIMIT = 50;
 
@@ -292,6 +316,19 @@ export default function ProjectWorkspace() {
     eventIdCounter.current += 1;
     const event = makeActivityEvent(text, details, successLabel, eventIdCounter.current);
     setEvents((current) => [event, ...current].slice(0, ACTIVITY_LOG_LIMIT));
+    if (selectedProject) {
+      // Fire-and-forget, plain fetch (not apiFetch): apiFetch redirects the
+      // whole page to /login on a 401, which is right for a foreground data
+      // load but wrong for a background audit write -- a stale/expired
+      // session shouldn't yank the user away from what they were doing just
+      // because the persisted copy of a status message couldn't be saved.
+      fetch(`${apiUrl}/projects/${selectedProject.id}/activity-events`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, details, success_label: successLabel }),
+      }).catch(() => {});
+    }
   }
   const [loading, setLoading] = useState(false);
   // Dedicated to gating the file picker specifically while an upload request
@@ -357,12 +394,13 @@ export default function ProjectWorkspace() {
   }
 
   async function loadProjectData(project: Project) {
-    const [fileResponse, revisionResponse, calculationResponse, processingResponse, summaryResponse] = await Promise.all([
+    const [fileResponse, revisionResponse, calculationResponse, processingResponse, summaryResponse, activityResponse] = await Promise.all([
       apiFetch(`${apiUrl}/projects/${project.id}/files`),
       apiFetch(`${apiUrl}/projects/${project.id}/site-model/revisions`),
       apiFetch(`${apiUrl}/projects/${project.id}/calculations`),
       apiFetch(`${apiUrl}/projects/${project.id}/processing`),
       apiFetch(`${apiUrl}/projects/${project.id}/summaries`),
+      apiFetch(`${apiUrl}/projects/${project.id}/activity-events`),
     ]);
     if (fileResponse.ok) setFiles(await fileResponse.json());
     const jobs = processingResponse.ok ? ((await processingResponse.json()) as ProcessingJob[]) : [];
@@ -382,6 +420,16 @@ export default function ProjectWorkspace() {
     }
     if (calculationResponse.ok) setCalculations(await calculationResponse.json());
     if (summaryResponse.ok) setSummaryHistory(await summaryResponse.json());
+    // Phase 12's persisted audit trail: this project's own durable history,
+    // replacing whatever local-only events an earlier project's selection
+    // left behind. Not fatal if it 404s/fails -- the workspace still works,
+    // just without a history to show until the next successful load.
+    if (activityResponse.ok) {
+      const persisted: PersistedActivityEvent[] = await activityResponse.json();
+      setEvents(persisted.map(activityEventFromPersisted));
+    } else {
+      setEvents([]);
+    }
   }
 
   async function loadArchivedFiles() {
@@ -560,6 +608,8 @@ export default function ProjectWorkspace() {
     setHighlightedEntityIds([]);
     setPlanSnippetUrl(null);
     setPlanSnippetError(null);
+    setEvents([]);
+    setShowActivityLog(false);
     await loadProjectData(project);
   }
 

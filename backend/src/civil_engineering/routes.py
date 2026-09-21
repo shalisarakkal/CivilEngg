@@ -48,6 +48,7 @@ from civil_engineering.config import get_settings
 from civil_engineering.database import get_db
 from civil_engineering.extraction import ExtractionError, parse_file
 from civil_engineering.models import (
+    ActivityEvent,
     CalculationResult,
     Client,
     ExtractedDocument,
@@ -66,6 +67,8 @@ from civil_engineering.models import (
 )
 from civil_engineering.plan_snippets import PlanSnippetError, render_dxf_snippet
 from civil_engineering.schemas import (
+    ActivityEventCreate,
+    ActivityEventResponse,
     ArchivedProjectResponse,
     ArchivedSourceFileResponse,
     CalculationRequest,
@@ -2005,3 +2008,52 @@ def ask_question(
     database.commit()
     database.refresh(question)
     return question
+
+
+@router.post(
+    "/projects/{project_id}/activity-events",
+    response_model=ActivityEventResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_activity_event(
+    project_id: str,
+    payload: ActivityEventCreate,
+    database: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _project: Project = Depends(require_project_member),
+) -> ActivityEvent:
+    """Phase 12's persisted audit trail: records one notable action taken
+    within this project, mirroring what the frontend's own session-only
+    activity log already shows, so the history survives a reload and is
+    visible to any other member of the project. Any project member may
+    record one -- same access boundary as everything else project-scoped,
+    via require_project_member -- not just admins."""
+    event = ActivityEvent(
+        project_id=project_id,
+        user_id=user.id,
+        text=payload.text,
+        details=payload.details,
+        success_label=payload.success_label,
+    )
+    database.add(event)
+    database.commit()
+    database.refresh(event)
+    return event
+
+
+@router.get("/projects/{project_id}/activity-events", response_model=list[ActivityEventResponse])
+def list_activity_events(
+    project_id: str,
+    limit: int = 50,
+    database: Session = Depends(get_db),
+    _project: Project = Depends(require_project_member),
+) -> list[ActivityEvent]:
+    capped_limit = max(1, min(limit, 200))
+    return list(
+        database.scalars(
+            select(ActivityEvent)
+            .where(ActivityEvent.project_id == project_id)
+            .order_by(ActivityEvent.created_at.desc())
+            .limit(capped_limit)
+        )
+    )

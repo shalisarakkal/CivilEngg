@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0022_extend_rls_nested_tables (head)
+0023_add_activity_events (head)
 ```
 
 Return to the project root:

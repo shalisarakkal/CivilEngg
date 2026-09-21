@@ -168,6 +168,20 @@ That role lives in `properties.semantic_type` instead, added in Phase 9: `parcel
 
 `answer` is the full response returned by the AI provider, stored as JSON — it includes the answer text, method, result/unit where applicable, `source_references`, `limitations`, and `confidence`. These are not separate columns.
 
+### ActivityEvent
+
+Phase 12's persisted audit trail, added 2026-09-21 (migration `0023_add_activity_events`). Complements the frontend's own session-only activity log (kept for instant, no-round-trip feedback) with a durable copy that survives a reload and is visible to any other project member — the corrected scope after the initial session-only implementation, once a persisted trail was actually asked for.
+
+- `id`
+- `project_id`
+- `user_id` (nullable — `SET NULL` if the user is later deleted, so the event itself is never lost)
+- `text`
+- `details` (JSON; mirrors the frontend's `BatchResult[]` shape for a multi-item action, null for a single-outcome one)
+- `success_label`
+- `created_at`
+
+No `tenant_id` — reaches its tenant boundary via `project_id`, matching every other table nested under `Project` (see the note below). `created_at` uses a Python-side `datetime.now(timezone.utc)` default rather than this file's usual `server_default=func.now()`: SQLite's `CURRENT_TIMESTAMP` (what `func.now()` compiles to there) only has 1-second resolution, and several events routinely land within the same request or UI batch — a real ordering bug found via a failing test before this was fixed.
+
 ## Relationships
 
 ```text
@@ -194,5 +208,5 @@ SourceFile 1 -- 1 SourceFile                  (superseded_by_id, optional: the f
 ## Open Modeling Questions
 
 - Which projected coordinate reference systems to support explicitly. Whether a geographic (lat/lon) CRS should be rejected is settled: it is (see RISK_REGISTER.md) — a project cannot adopt one, and planar measurements are refused for any project that already carries one.
-- Query-level `Tenant` scoping is enforced, `User.username` is unique per `(tenant_id, username)` rather than globally (with a new globally-unique `email` column added as the login identifier — migration `0020_add_email_tenant_username`), a tenant-provisioning API (`POST`/`GET /tenants`) exists, and Postgres Row-Level Security is enforced as a database-enforced backstop on `Project`/`Client` (migration `0021_add_row_level_security`) and, transitively, on every table that reaches a `Project` (`SourceFile`, `ProcessingJob`, `ProjectRevision`, `CalculationResult`, `ProjectSummary`, `QuestionAnswer`, `ProjectMembership` directly; `ExtractedDocument`/`SiteModelEntity` two hops removed — migration `0022_extend_rls_nested_tables`), each via a policy checking `<fk column> IN (SELECT id FROM <parent table>)` rather than duplicating tenant-match logic. **Verified end-to-end against a real local Postgres 18 instance, 2026-09-20** (all of the above — see RISK_REGISTER.md and PLAN.md Phase 16). Still open, by design: RLS does not cover `User`/`Session` (a bootstrapping paradox for `User` — see migration `0021`'s docstring) or `PurgeHistoryEntry` (no foreign key to `Project`/`SourceFile` at all, by design — see that model's own docstring).
+- Query-level `Tenant` scoping is enforced, `User.username` is unique per `(tenant_id, username)` rather than globally (with a new globally-unique `email` column added as the login identifier — migration `0020_add_email_tenant_username`), a tenant-provisioning API (`POST`/`GET /tenants`) exists, and Postgres Row-Level Security is enforced as a database-enforced backstop on `Project`/`Client` (migration `0021_add_row_level_security`) and, transitively, on every table that reaches a `Project` (`SourceFile`, `ProcessingJob`, `ProjectRevision`, `CalculationResult`, `ProjectSummary`, `QuestionAnswer`, `ProjectMembership`, `ActivityEvent` directly; `ExtractedDocument`/`SiteModelEntity` two hops removed — migration `0022_extend_rls_nested_tables`, extended to `ActivityEvent` in migration `0023_add_activity_events`), each via a policy checking `<fk column> IN (SELECT id FROM <parent table>)` rather than duplicating tenant-match logic. **Verified end-to-end against a real local Postgres 18 instance, 2026-09-20** (all of the above — see RISK_REGISTER.md and PLAN.md Phase 16). Still open, by design: RLS does not cover `User`/`Session` (a bootstrapping paradox for `User` — see migration `0021`'s docstring) or `PurgeHistoryEntry` (no foreign key to `Project`/`SourceFile` at all, by design — see that model's own docstring).
 - `User`, `Session`, and `ProjectMembership` (added in Phase 15) are not yet documented in "Initial Entities" above — a pre-existing gap noted here rather than backfilled in this pass.

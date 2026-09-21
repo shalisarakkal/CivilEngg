@@ -391,3 +391,37 @@ def test_two_tenants_can_share_a_username_but_not_an_email(
         assert login.json()["tenant_id"] == tenant_a
     finally:
         app.dependency_overrides.clear()
+
+
+def test_activity_events_are_scoped_to_tenant(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """Phase 12's persisted audit trail (POST/GET
+    /projects/{id}/activity-events) is project-scoped, not tenant-scoped
+    directly -- but a project itself is tenant-scoped, so an admin from a
+    different tenant should get the same 404 on its activity events that
+    they'd get on the project itself."""
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    try:
+        tenant_a = _seed_tenant(sessions, name="Acme Engineering")
+        tenant_b = _seed_tenant(sessions, name="Beta Engineering")
+        _seed_user(sessions, username="owner_a", role=ROLE_POWER_USER, tenant_id=tenant_a)
+        _seed_user(sessions, username="admin_b", role=ROLE_ADMIN, tenant_id=tenant_b)
+
+        client.post("/auth/login", json={"email": "owner_a@example.com", "password": "secret123"})
+        project_a = client.post("/projects", json={"name": "Acme Site"}).json()
+        created = client.post(
+            f"/projects/{project_a['id']}/activity-events", json={"text": "Site summary generated."}
+        )
+        assert created.status_code == 201
+        client.post("/auth/logout")
+
+        client.post("/auth/login", json={"email": "admin_b@example.com", "password": "secret123"})
+        assert client.get(f"/projects/{project_a['id']}/activity-events").status_code == 404
+        assert (
+            client.post(
+                f"/projects/{project_a['id']}/activity-events",
+                json={"text": "Should not be allowed."},
+            ).status_code
+            == 404
+        )
+    finally:
+        app.dependency_overrides.clear()

@@ -74,10 +74,11 @@ docstrings.
 - `POST /projects/{project_id}/archive` - archive a project (owner/admin only)
 - `GET /admin/projects/archived` - list archived projects (not `user` role)
 - `POST /admin/projects/{project_id}/restore` - restore an archived project (owner/admin only)
-- `DELETE /admin/projects/{project_id}` - permanently purge an archived project (owner/admin only; deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, and Q&A history, and its on-disk storage directory)
+- `DELETE /admin/projects/{project_id}` - permanently purge an archived project (owner/admin only; deletes its database rows, cascading to files, jobs, revisions, entities, calculations, summaries, Q&A history, and activity events, and its on-disk storage directory)
 - `GET /projects/{project_id}/members` - list a project's collaborators
 - `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only; the collaborator must belong to the project's own tenant)
 - `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user in the project's own tenant)
+- `POST /projects/{project_id}/activity-events` / `GET /projects/{project_id}/activity-events` - Phase 12's persisted audit trail: record/list notable actions taken within the project (any project member, matching every other project-scoped resource's access boundary). `GET` supports `?limit=` (default 50, clamped to a max of 200), newest first. Complements the frontend's own session-only activity log (kept for instant, no-round-trip feedback) with a durable copy that survives a reload and is visible to any other project member.
 
 A project's optional `coordinate_reference_system` must be a projected CRS. `POST`/`PATCH` return `422` for a geographic (lat/lon degree) one, such as `EPSG:4326`, because every measurement the app performs is planar. A CRS that pyproj does not recognize, or none at all, is accepted and the project's coordinates are assumed to be planar already.
 

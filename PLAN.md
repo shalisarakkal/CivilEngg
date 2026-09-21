@@ -393,22 +393,24 @@ Phase 6 lifecycle additions:
 
 **Scoping decisions** (2026-09-21):
 - **Event scope:** every action already shown in the status line — all ~80 existing `setMessage()` call sites in `ProjectWorkspace.tsx` (upload, process, accept revision, calculate, summarize, ask question, archive/restore/purge, membership changes, etc.). No curated subset — this is a direct swap of the single-line banner's underlying model for a log, not a new editorial judgment about what's "notable enough."
-- **Retention:** session-only, in-browser. Events live in React state for the life of the tab; a reload clears them. This directly fixes the reported bug (an outcome lost *within the same session* because a later action overwrote it) with no backend changes. Persisting events server-side (surviving a reload, visible from another device, doubling as an audit trail) is explicitly out of scope here — it overlaps with the still-unscoped "full audit-event history" item elsewhere in the roadmap and would need its own tenant-scoped table/API/retention policy (Phase 16-style), not a fit for what the actual reported bug needed.
+- **Retention:** persisted, project-scoped, server-side. First built as session-only, in-browser (a decision made without user confirmation after an unanswered clarifying question, then corrected once actually asked for) — a real, durable audit trail: `POST`/`GET /projects/{id}/activity-events` (migration `0023_add_activity_events`), readable by any project member after the fact, surviving a reload and visible from another session/device. Project-scoped, not tenant-scoped directly, matching every other table nested under `Project` (PLAN.md Phase 16's convention) and reusing `require_project_member` rather than inventing a new visibility rule. No auto-purge/retention window, deliberately — an "audit trail" implies durability by default, unlike `purge_history`'s finite window (Phase 13); a retention policy is a separate, opt-in decision if wanted later. The frontend's local, session-only copy is kept alongside this, not replaced — it's what gives instant, no-round-trip feedback the moment an action completes, with the persisted copy as the durable backstop.
 - **UI:** a persistent, expandable log panel, not toasts. A collapsed `Activity log (N)` toggle appears once a second event exists; expanding it shows every event newest-first with a timestamp, each with its own inline batch-detail breakdown for multi-item actions (not gated behind a second click, unlike the always-visible top banner's own toggle). The top single-line banner (`.message`, its own "Show details" toggle, `.batch-details`) is unchanged, byte-for-byte — this is additive, not a replacement, so no existing behavior (or Playwright coverage of it) changed.
 
 **Work items:**
 
-- [x] Event model: `ActivityEvent` (`id`, `timestamp`, `text`, `details`, `successLabel`) in `ProjectWorkspace.tsx`. `setMessage()` (unchanged signature, still called from every existing site) now also appends one to an `events` array, capped at the last 50 (`ACTIVITY_LOG_LIMIT`) to bound memory over a long session.
+- [x] Event model: `ActivityEvent` (`id`, `timestamp`, `text`, `details`, `successLabel`) in `ProjectWorkspace.tsx`. `setMessage()` (unchanged signature, still called from every existing site) now also appends one to a local `events` array, capped at the last 50 (`ACTIVITY_LOG_LIMIT`).
 - [x] UI: the `Activity log (N)` / `Hide activity log` toggle and `.activity-log` panel (`app/globals.css`), rendered directly below the existing banner/batch-details block.
 - [x] `Date.now()`/id-generation moved into a module-level `makeActivityEvent()` helper, not inline in the component: `eslint`'s `react-hooks/purity` rule flags an impure call found anywhere inside a component's own function body (even in a nested function declaration only ever invoked from event handlers, like `setMessage`) — matches the existing precedent at line ~109's `msRemaining` helper, also module-level for the same reason.
-- [x] Test coverage: `tests/e2e/workspace.spec.ts`'s new "an earlier action's outcome is still recoverable after a later one overwrites the status line" — runs a calculation, then requests a summary, confirms the calculation's message is no longer the visible banner (matching prior behavior) but is still present in the expanded activity log alongside the summary's. Verified as a real regression test via reproduce-first: reverted `setMessage()`'s event-push, confirmed the new test failed (timed out waiting for the toggle button, which never appears with an empty `events` array), restored the fix.
-- [x] Full regression check: all 22 pre-existing Playwright e2e tests plus the 1 new one (23/23) pass unchanged; `tsc --noEmit` and `eslint` both clean.
+- [x] Persistence: `ActivityEvent` model, migration `0023_add_activity_events` (project-scoped, RLS covering it the same way as every other nested table — `project_id IN (SELECT id FROM projects)`), `ActivityEventCreate`/`ActivityEventResponse` schemas, and `POST`/`GET /projects/{id}/activity-events` routes, both behind `require_project_member`. `setMessage()` now also fires a background `POST` when a project is selected, using plain `fetch` rather than this app's `apiFetch` wrapper deliberately: `apiFetch` redirects the whole page to `/login` on a `401`, right for a foreground data load but wrong for a background audit write. `loadProjectData` now also `GET`s and hydrates `events` from the persisted list whenever a project loads or is switched to, replacing the local-only copy with the durable one.
+- [x] `created_at` uses a Python-side `datetime.now(timezone.utc)` default, not this file's usual `server_default=func.now()`: SQLite's `CURRENT_TIMESTAMP` only has 1-second resolution, and several events routinely land within the same request/UI batch, which would tie and sort arbitrarily under `ORDER BY created_at DESC` — found via a genuinely failing new test before being fixed, not by inspection.
+- [x] Test coverage: `tests/e2e/workspace.spec.ts`'s new e2e test (the local/instant path, verified via reproduce-first: reverted the event-push, confirmed it failed, restored the fix) plus `backend/tests/test_activity_events.py` (round-trip with details/user, default details/label, newest-first ordering, the `?limit=` cap, and 404 for a non-member) and a new cross-tenant isolation test in `test_tenant_isolation.py`. Verified end-to-end against a real local Postgres 18 instance (2026-09-21), continuing this session's established discipline for any RLS-touching migration: schema/RLS confirmed via `pg_class`/`pg_policies`, and a full owner-vs-non-member round trip proven through the real running app over HTTP.
+- [x] Full regression check: all 22 pre-existing Playwright e2e tests plus the 1 new one (23/23) pass unchanged; `tsc --noEmit` and `eslint` both clean; 154 backend tests pass (148 pre-existing + 6 new); mypy shows only the 13 pre-existing baseline errors.
 
 **Exit criteria:**
 
-- [x] An earlier action's outcome is never silently lost within a session, even after a later action overwrites the single-line banner — recoverable via the activity log
+- [x] An earlier action's outcome is never silently lost, even after a later action overwrites the single-line banner — recoverable via the activity log, and durable across a reload or from another session
 - [x] No existing behavior changed: the single-line banner and its own "Show details" toggle are pixel-for-pixel and DOM-for-DOM identical to before this phase
-- [x] Backend unaffected — this is a frontend-only, client-state feature with no new API surface or migration
+- [x] Persisted events are project-scoped with the same access boundary and database-enforced backstop (RLS) as every other project-scoped resource — verified against a real Postgres instance, not just written
 
 ### Phase 13 - Archive Retention and Purge History
 
@@ -910,9 +912,12 @@ freeze):
 1. **Phase 12 - Activity Events** (PLAN.md, complete 2026-09-21): the
    direct fix for a real reported failure (a multi-file batch outcome
    silently lost because a later action overwrote the single-line status
-   banner), not a speculative improvement. A session-only, in-browser
-   activity log now keeps every action's outcome recoverable for the life
-   of the tab, additive to the unchanged single-line banner.
+   banner), not a speculative improvement. A local, instant activity log
+   keeps every action's outcome recoverable in the moment, backed by a
+   real persisted, project-scoped audit trail (`POST`/`GET
+   /projects/{id}/activity-events`) that survives a reload and is visible
+   to any other project member — additive to the unchanged single-line
+   banner.
 2. **Phase 13 optional - archive/project file compression**: lowest
    urgency of the deferred work — no reported pain point yet, and
    project-level compression is a bigger change than file-level since

@@ -223,6 +223,24 @@ class SummaryResponse(BaseModel):
     created_at: datetime
 
 
+class ActivityEventCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    details: list[dict[str, object]] | None = None
+    success_label: str = Field(default="Successful", max_length=64)
+
+
+class ActivityEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    user_id: str | None
+    text: str
+    details: list[dict[str, object]] | None
+    success_label: str
+    created_at: datetime
+
+
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     revision_ids: list[str] | None = None

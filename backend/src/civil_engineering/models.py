@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -272,6 +272,50 @@ class QuestionAnswer(Base):
     intent: Mapped[str] = mapped_column(String(32), nullable=False)
     answer: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActivityEvent(Base):
+    """A persisted record of a notable action taken within a project --
+    Phase 12's audit trail. Distinct from the frontend's own session-only
+    activity log (kept for instant, no-round-trip feedback): this is the
+    durable copy, project-scoped and readable by any member of the project
+    after the fact, including across reloads and other sessions.
+
+    No `tenant_id` column, matching the convention already established for
+    every other table nested under `Project` (source_files, calculation_results,
+    etc. -- PLAN.md Phase 16, migration 0022_extend_rls_nested_tables): the
+    tenant boundary is reached via `project_id`, not duplicated here, and the
+    same RLS policy shape applies (see migration 0023_add_activity_events).
+    """
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Mirrors the frontend's BatchResult[] shape for a multi-item action
+    # (e.g. a multi-file upload/archive/accept); null for a single-outcome
+    # action, matching setMessage()'s own details=null default.
+    details: Mapped[list[Any] | None] = mapped_column(JSON)
+    success_label: Mapped[str] = mapped_column(String(64), nullable=False, default="Successful")
+    # A Python-side default, not server_default=func.now() like every other
+    # created_at column in this file: an audit trail's whole point is
+    # correct ordering, and several events routinely land within the same
+    # request or the same UI batch -- easily within the same wall-clock
+    # second. SQLite's CURRENT_TIMESTAMP (what func.now() compiles to there)
+    # only has 1-second resolution, so same-second events would tie and sort
+    # in an arbitrary order; datetime.now(timezone.utc) has microsecond
+    # resolution on both SQLite and Postgres, which is what list_activity_
+    # events' ORDER BY created_at DESC actually relies on.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    project: Mapped[Project] = relationship()
+    user: Mapped["User | None"] = relationship()
 
 
 class PurgeHistoryEntry(Base):
