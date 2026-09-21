@@ -537,6 +537,78 @@ test.describe("project workspace", () => {
     await expect(page.getByText("4.000 percent")).toBeVisible();
   });
 
+  test("activity log: an earlier action's outcome is still recoverable after a later one overwrites the status line (Phase 12)", async ({ page }) => {
+    // Reproduces the real reported bug this phase fixes: the status line
+    // covers only the single most recent action, so running a calculation
+    // and then requesting a summary used to leave no trace anywhere in the
+    // DOM that the calculation had happened at all -- checking back later,
+    // there was no way to recover it.
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) =>
+      json(route, [{ id: "rev-1", revision_number: 1, created_at: "2026-01-01T00:00:00Z", source_job_ids: ["job-1"], notes: null }]),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions/rev-1/entities*`, (route) => json(route, []));
+    await page.route(`${API}/projects/${PROJECT.id}/calculations`, async (route) => {
+      if (route.request().method() === "POST") {
+        return json(
+          route,
+          {
+            id: "calc-1",
+            project_id: PROJECT.id,
+            revision_id: null,
+            calculation_type: "slope",
+            input_entity_ids: null,
+            inputs: { start_elevation: 100, end_elevation: 104, horizontal_distance: 100 },
+            formula: "(change in elevation / horizontal distance) * 100",
+            result: 4,
+            unit: "percent",
+            assumptions: ["Distance input is measured in ft"],
+            details: null,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+          201,
+        );
+      }
+      return json(route, []);
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/summaries`, async (route) => {
+      if (route.request().method() === "GET") return json(route, []);
+      return json(route, {
+        id: "summary-1",
+        project_id: PROJECT.id,
+        revision_ids: null,
+        content: {
+          summary: "Flat, single-parcel site.",
+          grading: "Flat site.",
+          drainage: "No issues noted.",
+          utilities: "None mapped.",
+          attention_flags: [],
+          limitations: ["Deterministic summary; not a substitute for a licensed review."],
+        },
+        created_at: "2026-01-01T00:00:00Z",
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+
+    await page.getByRole("button", { name: "Run calculation" }).click();
+    await expect(page.getByText("slope calculation completed.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Request site summary" }).click();
+    await expect(page.getByText("Site summary generated.")).toBeVisible();
+    // The status line now shows only the summary outcome -- the calculation
+    // message is no longer the visible banner (matches pre-Phase-12 behavior;
+    // the fix is that it's still recoverable, checked below, not that the
+    // banner itself stops being single-line).
+    await expect(page.locator(".message")).not.toContainText("slope calculation completed.");
+
+    await page.getByRole("button", { name: /^Activity log/ }).click();
+    const log = page.locator(".activity-log");
+    await expect(log).toContainText("slope calculation completed.");
+    await expect(log).toContainText("Site summary generated.");
+  });
+
   test("site intelligence: generating multiple summaries keeps a history instead of replacing", async ({ page }) => {
     await mockBaseline(page, [PROJECT]);
     await page.route(`${API}/projects/${PROJECT.id}/site-model/revisions`, (route) =>

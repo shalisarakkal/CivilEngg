@@ -387,17 +387,28 @@ Phase 6 lifecycle additions:
 - [x] Generating a new summary does not hide a previously generated one from the UI
 - [x] Each summary in the list clearly shows which revisions it covered and when it was generated
 
-### Phase 12 - Activity Events (not yet scoped)
+### Phase 12 - Activity Events
 
 **Objective:** Found via a real report: processing 26 files, then running a calculation before checking back, silently lost the processing outcome. The status banner is a single line covering the single most recent action across the whole app, and a multi-file batch doesn't block the rest of the page while it runs — so whichever action's status update lands last simply overwrites the banner with no way to recover what was there before. A narrower fix (a small panel preserving just the last few multi-file batch outcomes) was built and verified, then deliberately rolled back in favor of this: a proper activity-events system recording every notable action app-wide (not just multi-file batches), not only the ones that happen to involve more than one file.
 
-**Work items (not yet broken down):**
+**Scoping decisions** (2026-09-21):
+- **Event scope:** every action already shown in the status line — all ~80 existing `setMessage()` call sites in `ProjectWorkspace.tsx` (upload, process, accept revision, calculate, summarize, ask question, archive/restore/purge, membership changes, etc.). No curated subset — this is a direct swap of the single-line banner's underlying model for a log, not a new editorial judgment about what's "notable enough."
+- **Retention:** session-only, in-browser. Events live in React state for the life of the tab; a reload clears them. This directly fixes the reported bug (an outcome lost *within the same session* because a later action overwrote it) with no backend changes. Persisting events server-side (surviving a reload, visible from another device, doubling as an audit trail) is explicitly out of scope here — it overlaps with the still-unscoped "full audit-event history" item elsewhere in the roadmap and would need its own tenant-scoped table/API/retention policy (Phase 16-style), not a fit for what the actual reported bug needed.
+- **UI:** a persistent, expandable log panel, not toasts. A collapsed `Activity log (N)` toggle appears once a second event exists; expanding it shows every event newest-first with a timestamp, each with its own inline batch-detail breakdown for multi-item actions (not gated behind a second click, unlike the always-visible top banner's own toggle). The top single-line banner (`.message`, its own "Show details" toggle, `.batch-details`) is unchanged, byte-for-byte — this is additive, not a replacement, so no existing behavior (or Playwright coverage of it) changed.
 
-- [ ] Decide what counts as a loggable "activity event" app-wide (every action currently passed to the status banner, or a curated subset) and its retention (session-only vs. persisted, how many/how long)
-- [ ] Decide the UI: a persistent panel/log, a toast/notification stack, or something else
-- [ ] Design and implement the event model and storage
-- [ ] Implement the chosen UI, replacing or complementing the existing single-line status banner
-- [ ] Add test coverage
+**Work items:**
+
+- [x] Event model: `ActivityEvent` (`id`, `timestamp`, `text`, `details`, `successLabel`) in `ProjectWorkspace.tsx`. `setMessage()` (unchanged signature, still called from every existing site) now also appends one to an `events` array, capped at the last 50 (`ACTIVITY_LOG_LIMIT`) to bound memory over a long session.
+- [x] UI: the `Activity log (N)` / `Hide activity log` toggle and `.activity-log` panel (`app/globals.css`), rendered directly below the existing banner/batch-details block.
+- [x] `Date.now()`/id-generation moved into a module-level `makeActivityEvent()` helper, not inline in the component: `eslint`'s `react-hooks/purity` rule flags an impure call found anywhere inside a component's own function body (even in a nested function declaration only ever invoked from event handlers, like `setMessage`) — matches the existing precedent at line ~109's `msRemaining` helper, also module-level for the same reason.
+- [x] Test coverage: `tests/e2e/workspace.spec.ts`'s new "an earlier action's outcome is still recoverable after a later one overwrites the status line" — runs a calculation, then requests a summary, confirms the calculation's message is no longer the visible banner (matching prior behavior) but is still present in the expanded activity log alongside the summary's. Verified as a real regression test via reproduce-first: reverted `setMessage()`'s event-push, confirmed the new test failed (timed out waiting for the toggle button, which never appears with an empty `events` array), restored the fix.
+- [x] Full regression check: all 22 pre-existing Playwright e2e tests plus the 1 new one (23/23) pass unchanged; `tsc --noEmit` and `eslint` both clean.
+
+**Exit criteria:**
+
+- [x] An earlier action's outcome is never silently lost within a session, even after a later action overwrites the single-line banner — recoverable via the activity log
+- [x] No existing behavior changed: the single-line banner and its own "Show details" toggle are pixel-for-pixel and DOM-for-DOM identical to before this phase
+- [x] Backend unaffected — this is a frontend-only, client-state feature with no new API surface or migration
 
 ### Phase 13 - Archive Retention and Purge History
 
@@ -896,11 +907,12 @@ These are logical boundaries; exact routes and schemas should be finalized durin
 **Nearest-term, ahead of the numbered list below** (per ADR-008's scope
 freeze):
 
-1. **Phase 12 - Activity Events** (PLAN.md, not yet scoped): highest
-   priority of anything deferred from this release — it's the direct fix
-   for a real reported failure (a multi-file batch outcome silently lost
-   because a later action overwrote the single-line status banner), not
-   a speculative improvement.
+1. **Phase 12 - Activity Events** (PLAN.md, complete 2026-09-21): the
+   direct fix for a real reported failure (a multi-file batch outcome
+   silently lost because a later action overwrote the single-line status
+   banner), not a speculative improvement. A session-only, in-browser
+   activity log now keeps every action's outcome recoverable for the life
+   of the tab, additive to the unchanged single-line banner.
 2. **Phase 13 optional - archive/project file compression**: lowest
    urgency of the deferred work — no reported pain point yet, and
    project-level compression is a bigger change than file-level since

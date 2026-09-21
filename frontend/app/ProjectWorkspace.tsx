@@ -1,6 +1,6 @@
 "use client";
 
-import { DragEvent, FormEvent, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { apiFetch, apiUrl, errorMessage } from "./api";
@@ -84,6 +84,34 @@ function fileTypeGroup(name: string): string {
 }
 
 type BatchResult = { name: string; ok: boolean; detail: string; retryable?: boolean; reason?: "duplicate" | "rejected"; size?: number; skipped?: boolean };
+
+// Phase 12: every setMessage() call also becomes one of these, kept for the
+// life of the browser tab (not persisted -- a reload starts a fresh log).
+// This is what actually fixes the reported bug: a later action's status no
+// longer erases an earlier one's, since both remain visible in the log
+// instead of only the single most recent line.
+type ActivityEvent = { id: string; timestamp: number; text: string; details: BatchResult[] | null; successLabel: string };
+
+const ACTIVITY_LOG_LIMIT = 50;
+
+function formatEventTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// Module-level, not a component-local helper: Date.now() is impure, and the
+// react-hooks/purity lint rule flags an impure call found anywhere inside a
+// component's own function body (including a nested function declaration
+// like setMessage), even though setMessage itself only ever runs from event
+// handlers, never during render.
+function makeActivityEvent(
+  text: string,
+  details: BatchResult[] | null,
+  successLabel: string,
+  sequence: number
+): ActivityEvent {
+  const timestamp = Date.now();
+  return { id: `${timestamp}-${sequence}`, timestamp, text, details, successLabel };
+}
 
 // Browsers deliberately never expose a selected/dropped file's filesystem
 // path (only its name) as a privacy/security measure, so this is the most
@@ -252,12 +280,18 @@ export default function ProjectWorkspace() {
   const [messageDetails, setMessageDetails] = useState<BatchResult[] | null>(null);
   const [messageSuccessLabel, setMessageSuccessLabel] = useState("Successful");
   const [showMessageDetails, setShowMessageDetails] = useState(false);
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [showActivityLog, setShowActivityLog] = useState(false);
+  const eventIdCounter = useRef(0);
 
   function setMessage(text: string, details: BatchResult[] | null = null, successLabel = "Successful") {
     setMessageText(text);
     setMessageDetails(details);
     setMessageSuccessLabel(successLabel);
     setShowMessageDetails(false);
+    eventIdCounter.current += 1;
+    const event = makeActivityEvent(text, details, successLabel, eventIdCounter.current);
+    setEvents((current) => [event, ...current].slice(0, ACTIVITY_LOG_LIMIT));
   }
   const [loading, setLoading] = useState(false);
   // Dedicated to gating the file picker specifically while an upload request
@@ -1284,6 +1318,33 @@ export default function ProjectWorkspace() {
               <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.size !== undefined ? ` (${formatFileSize(item.size)})` : ""}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
             </div>
           ))}
+        </div>
+      )}
+      {events.length > 1 && (
+        <div className="activity-log-wrap">
+          <button type="button" className="activity-log-toggle" onClick={() => setShowActivityLog((current) => !current)}>
+            {showActivityLog ? "Hide activity log" : `Activity log (${events.length})`}
+          </button>
+          {showActivityLog && (
+            <ul className="activity-log">
+              {events.map((event) => (
+                <li key={event.id} className="activity-log-item">
+                  <span className="activity-log-time">{formatEventTime(event.timestamp)}</span>
+                  <span className="activity-log-text">{event.text}</span>
+                  {event.details && event.details.length > 1 && (
+                    <div className="activity-log-item-details">
+                      {groupBatchResults(event.details, event.successLabel).map((group) => (
+                        <div className="batch-details-group" key={group.label}>
+                          <strong>{group.label} ({group.items.length})</strong>
+                          <ul>{group.items.map((item) => <li key={item.name}>{item.name}{item.size !== undefined ? ` (${formatFileSize(item.size)})` : ""}{item.detail ? ` — ${item.detail}` : ""}</li>)}</ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       <section className="workspace-grid">
