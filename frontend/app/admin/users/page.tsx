@@ -29,6 +29,9 @@ function UsersAdminPage() {
   const [userPendingPasswordReset, setUserPendingPasswordReset] = useState<ManagedUser | null>(null);
   const [resetPassword, setResetPassword] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [userPendingEmailEdit, setUserPendingEmailEdit] = useState<ManagedUser | null>(null);
+  const [editEmail, setEditEmail] = useState("");
+  const [editingEmail, setEditingEmail] = useState(false);
 
   async function loadUsers() {
     const response = await apiFetch(`${apiUrl}/users`);
@@ -124,6 +127,31 @@ function UsersAdminPage() {
     } finally {
       setDeleting(false);
       setUserPendingDelete(null);
+    }
+  }
+
+  async function confirmEditEmail(event: FormEvent) {
+    event.preventDefault();
+    if (!userPendingEmailEdit) return;
+    const user = userPendingEmailEdit;
+    setMessage(null);
+    setEditingEmail(true);
+    try {
+      const response = await apiFetch(`${apiUrl}/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: editEmail }),
+      });
+      if (response.ok) {
+        setUserPendingEmailEdit(null);
+        setEditEmail("");
+        await loadUsers();
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Could not update email."));
+      }
+    } finally {
+      setEditingEmail(false);
     }
   }
 
@@ -251,6 +279,16 @@ function UsersAdminPage() {
                 type="button"
                 className="secondary-button"
                 onClick={() => {
+                  setUserPendingEmailEdit(user);
+                  setEditEmail(user.email ?? "");
+                }}
+              >
+                Edit email
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
                   setUserPendingPasswordReset(user);
                   setResetPassword("");
                 }}
@@ -264,6 +302,44 @@ function UsersAdminPage() {
           </div>
         ))}
       </section>
+      {userPendingEmailEdit && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="email-edit-title"
+          >
+            <p className="eyebrow">Edit email</p>
+            <h3 id="email-edit-title">Edit email for {userPendingEmailEdit.username}?</h3>
+            <form onSubmit={confirmEditEmail}>
+              <label htmlFor="edit-email">Email</label>
+              <input
+                id="edit-email"
+                type="email"
+                placeholder="Email"
+                value={editEmail}
+                onChange={(event) => setEditEmail(event.target.value)}
+                required
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={editingEmail}
+                  onClick={() => setUserPendingEmailEdit(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={editingEmail}>
+                  {editingEmail ? "Saving..." : "Save email"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
       {userPendingPasswordReset && (
         <div className="modal-backdrop" role="presentation">
           <section

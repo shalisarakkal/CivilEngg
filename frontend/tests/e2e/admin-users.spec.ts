@@ -88,3 +88,62 @@ test.describe("admin users: create user", () => {
     await expect(page.getByPlaceholder("Confirm password")).toHaveValue("");
   });
 });
+
+test.describe("admin users: edit email", () => {
+  const EXISTING_USER = {
+    id: "existing-user-id",
+    username: "jsmith",
+    email: "jsmith@old.example.com",
+    role: "user",
+    disabled_at: null,
+  };
+
+  test("Edit email opens prefilled with the current email and PATCHes the new one", async ({
+    page,
+  }) => {
+    const users = [{ ...EXISTING_USER }];
+    let patchBody: unknown = null;
+    await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
+    await page.route(`${API}/users`, (route) => json(route, users));
+    await page.route(`${API}/users/${EXISTING_USER.id}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchBody = route.request().postDataJSON();
+        users[0] = { ...users[0], email: "jsmith@new.example.com" };
+        return json(route, users[0]);
+      }
+      return route.continue();
+    });
+
+    await page.goto("/admin/users");
+    await expect(page.getByText("jsmith@old.example.com")).toBeVisible();
+
+    await page.getByRole("button", { name: "Edit email" }).click();
+    await expect(page.getByRole("heading", { name: "Edit email for jsmith?" })).toBeVisible();
+    await expect(page.locator("#edit-email")).toHaveValue("jsmith@old.example.com");
+
+    await page.locator("#edit-email").fill("jsmith@new.example.com");
+    await page.getByRole("button", { name: "Save email" }).click();
+
+    expect(patchBody).toEqual({ email: "jsmith@new.example.com" });
+    await expect(page.getByRole("heading", { name: "Edit email for jsmith?" })).not.toBeVisible();
+    await expect(page.getByText("jsmith@new.example.com")).toBeVisible();
+  });
+
+  test("a duplicate email surfaces the server's error and leaves the modal open", async ({
+    page,
+  }) => {
+    await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
+    await page.route(`${API}/users`, (route) => json(route, [EXISTING_USER]));
+    await page.route(`${API}/users/${EXISTING_USER.id}`, (route) =>
+      json(route, { detail: "Email already exists" }, 409),
+    );
+
+    await page.goto("/admin/users");
+    await page.getByRole("button", { name: "Edit email" }).click();
+    await page.locator("#edit-email").fill("taken@example.com");
+    await page.getByRole("button", { name: "Save email" }).click();
+
+    await expect(page.getByText("Email already exists")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Edit email for jsmith?" })).toBeVisible();
+  });
+});
