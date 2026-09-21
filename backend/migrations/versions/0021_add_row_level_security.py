@@ -29,14 +29,15 @@ auth.get_current_user does is look up which user a session belongs to,
 before the tenant context is known at all (the user IS how the tenant
 context gets determined) -- RLS on `users` would face a bootstrapping
 problem the existing app-layer scoping (Phase 16's query-scoping slice)
-doesn't have. Also deliberately NOT every table nested under Project
-(source_files, processing_jobs, project_revisions, site_model_entities,
+doesn't have. Every table nested under Project (source_files,
+processing_jobs, project_revisions, site_model_entities,
 calculation_results, project_summaries, question_answers,
-project_memberships) -- true defense-in-depth would extend RLS to each of
-those too, via a policy checking `project_id IN (SELECT id FROM projects
-WHERE ...)`, but that's a larger follow-up not attempted here. A missed
-application-layer check on one of those tables is not yet caught by this
-backstop.
+project_memberships, extracted_documents) is deliberately NOT covered by
+*this* migration either -- see migration 0022_extend_rls_nested_tables,
+which closes that gap via policies referencing this migration's own
+`projects` policy transitively, rather than duplicating its logic. Until
+0022 runs, a missed application-layer check on one of those tables is not
+yet caught by this backstop.
 
 FORCE ROW LEVEL SECURITY (not just ENABLE) is required: Postgres exempts a
 table's own owner from RLS policies by default, and this app's database

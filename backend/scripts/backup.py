@@ -13,13 +13,50 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
+
+from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from civil_engineering.config import get_settings
 from civil_engineering.database import engine
+
+_FORCED_RLS_TABLES_QUERY = """
+    SELECT relname FROM pg_class
+    WHERE relforcerowsecurity = true AND relkind = 'r'
+"""
+
+
+@contextmanager
+def _rls_lifted_for_dump() -> Iterator[None]:
+    """pg_dump, run as this app's own database role (the table owner, not a
+    superuser), fails outright against any table with FORCE ROW LEVEL
+    SECURITY: "query would be affected by row-level security policy" --
+    FORCE applies to the owner's own COPY, and pg_dump sets no session
+    variable to satisfy a policy's USING clause (PLAN.md Phase 16,
+    migrations 0021/0022_extend_rls_nested_tables, VERIFY.md section 3a).
+    Lifting FORCE for the duration of the dump and restoring it immediately
+    afterward -- in a finally, so a failed dump still leaves RLS enforced --
+    is a stopgap for this dev/manual script; a real production backup
+    process should instead run as a role with BYPASSRLS, which never hits
+    this at all. Tables are discovered from pg_class rather than hardcoded,
+    so this doesn't need updating every time RLS covers another table.
+    """
+    with engine.begin() as connection:
+        tables = [row[0] for row in connection.execute(text(_FORCED_RLS_TABLES_QUERY))]
+    for table in tables:
+        with engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY"))
+    try:
+        yield
+    finally:
+        for table in tables:
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
 
 
 def main() -> None:
@@ -62,7 +99,8 @@ def main() -> None:
         str(dump_path),
     ]
     env = {**os.environ, "PGPASSWORD": url.password or ""}
-    subprocess.run(command, check=True, env=env)
+    with _rls_lifted_for_dump():
+        subprocess.run(command, check=True, env=env)
 
     storage_source = Path(settings.local_storage_path)
     if storage_source.exists():

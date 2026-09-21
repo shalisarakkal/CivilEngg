@@ -107,7 +107,7 @@ uv run alembic current
 Expected:
 
 ```text
-0021_add_row_level_security (head)
+0022_extend_rls_nested_tables (head)
 ```
 
 Return to the project root:
@@ -174,6 +174,29 @@ COMMIT;
 If the migration was applied to a shared/real dev database (not a scratch
 one), back it up first with `pg_dump -F c` and confirm `alembic downgrade`
 cleanly reverses it before trusting `upgrade head` on anything that matters.
+
+**`pg_dump` gotcha found 2026-09-20:** once any table has
+`FORCE ROW LEVEL SECURITY`, `pg_dump` run as this app's own database role
+(the table owner, not a superuser) fails outright — `ERROR: query would be
+affected by row-level security policy for table "..."` — because FORCE
+applies to the owner's own `COPY`, and `pg_dump` has no session-variable
+hook to satisfy a policy's `USING` clause. Work around it by temporarily
+lifting FORCE, taking the dump, then restoring it immediately:
+
+```powershell
+$env:PGPASSWORD = "civil_engineering"
+$psql = "S:\Program Files\PostgreSQL\18\bin\psql.exe"
+& $psql -h localhost -U civil_engineering -d civil_engineering -c "ALTER TABLE projects NO FORCE ROW LEVEL SECURITY; ALTER TABLE clients NO FORCE ROW LEVEL SECURITY;"
+& "S:\Program Files\PostgreSQL\18\bin\pg_dump.exe" -h localhost -U civil_engineering -d civil_engineering -F c -f backup.dump
+& $psql -h localhost -U civil_engineering -d civil_engineering -c "ALTER TABLE projects FORCE ROW LEVEL SECURITY; ALTER TABLE clients FORCE ROW LEVEL SECURITY;"
+```
+
+A real production backup process should instead run as a role with
+`BYPASSRLS` (or a superuser), which never hits this at all — the
+lift/dump/restore dance above is a stopgap for manual/dev use, not the
+long-term answer. This applies to every RLS-forced table, which as of
+migration `0022_extend_rls_nested_tables` is 11 tables, not just
+`projects`/`clients` — see DEPLOYMENT.md's backup section.
 
 ## 4. Start The Backend
 

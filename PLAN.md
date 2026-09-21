@@ -756,14 +756,43 @@ than three different data models.
   `test_platform_admin_provisions_a_new_tenant_end_to_end` and
   `test_only_platform_admin_can_manage_tenants`.
 
+- [x] Row-Level Security extended to every table nested under `Project`
+  (2026-09-20, migration `0022_extend_rls_nested_tables`): `source_files`,
+  `processing_jobs`, `project_revisions`, `calculation_results`,
+  `project_summaries`, `question_answers`, `project_memberships` directly
+  (each via its own `project_id`), plus `extracted_documents` (via
+  `processing_job_id` -> `processing_jobs`) and `site_model_entities` (via
+  `revision_id` -> `project_revisions`) two hops removed from `projects`.
+  None of these tables carry their own `tenant_id`, so each policy is just
+  `<fk column> IN (SELECT id FROM <parent table>)` rather than duplicating
+  the parent's platform_admin/tenant-match logic — this composes correctly
+  because the parent table (`projects`, or `processing_jobs`/
+  `project_revisions` themselves, which get the same treatment) already
+  has `FORCE ROW LEVEL SECURITY`, which applies even to a subquery inside
+  another table's policy evaluation. **Verified against a real local
+  Postgres 18 instance (2026-09-20)**: confirmed the mechanism ad hoc
+  before writing the migration, then seeded full two-tenant hierarchies
+  (project -> source file -> processing job -> extracted document,
+  and project -> revision -> site-model entity) and proved isolation at
+  every depth, both directly in psql and through the real running app over
+  HTTP (upload a file, process it, accept a revision, request a summary
+  and a question — every insert into a newly-covered table succeeded under
+  its own tenant context). A cross-tenant write two hops from `tenant_id`
+  (inserting a `site_model_entities` row under another tenant's revision)
+  was rejected. Deliberately still not covered, same reasoning as
+  migration 0021: `users`/`sessions` (no `Project` relationship, plus
+  `users`' own bootstrapping paradox) and `purge_history` (designed with
+  no foreign key to `projects`/`source_files` at all, so there's nothing
+  to join through). This also surfaced a real, unrelated-to-scope
+  regression: `backup.py`'s `pg_dump` call, run as the app's own database
+  role rather than a superuser, started failing outright against any
+  `FORCE ROW LEVEL SECURITY` table — fixed by having the script discover
+  and temporarily lift `FORCE` around the dump, then restore it
+  immediately after (see DEPLOYMENT.md's Backup section).
+
 **Explicitly not done, even now** (see DECISIONS.md ADR-010's Consequence) —
 each is its own follow-on phase, not a checklist item here:
 
-- [ ] Extending Row-Level Security to tables nested under `Project`
-  (source_files, processing_jobs, project_revisions, site_model_entities,
-  calculation_results, project_summaries, question_answers,
-  project_memberships) via a policy checking `project_id IN (SELECT id FROM
-  projects WHERE ...)` — true defense-in-depth, but a larger follow-up
 - [ ] Any billing/subscription metadata on `Tenant`
 - [ ] Any frontend UI for `platform_admin`, multi-tenant administration, or
   surfacing `tenant_id` — everything above is API/backend-only
@@ -777,12 +806,13 @@ each is its own follow-on phase, not a checklist item here:
   `platform_admin` still sees/manages everything, verified by
   `backend/tests/test_tenant_isolation.py`
 - [x] Per-tenant `username` uniqueness, a tenant provisioning API, and a
-  Row-Level Security backstop are all in place and verified — a shared
-  instance is now operable end-to-end through the API alone, and RLS has
-  been confirmed working against a real local Postgres 18 instance
-  (2026-09-20), not just written by reasoning about it. Remaining scope
-  gap, not a verification gap: RLS covers only `projects`/`clients`, not
-  every table nested under `Project` (see "Explicitly not done" above).
+  Row-Level Security backstop covering `projects`/`clients` and every table
+  nested under `Project` are all in place and verified against a real
+  local Postgres 18 instance (2026-09-20), not just written by reasoning
+  about it — a shared instance is now operable end-to-end through the API
+  alone, with a database-enforced backstop behind every tenant-scoped
+  table. Remaining gap is scope, not verification: `users` and
+  `purge_history` remain deliberately outside RLS's coverage (see above).
 
 ## 5. Testing Strategy
 

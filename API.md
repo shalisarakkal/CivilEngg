@@ -50,11 +50,12 @@ which tenant's "jsmith" is meant, while `email` is unique install-wide.
 `POST /users` requires `email` in the body alongside `username`/`password`/
 `role`; `PATCH /users/{user_id}` accepts an optional `email`. `email` is
 lowercased on write and returned on `UserResponse`. This is enforced
-app-side, plus (2026-09-20) Postgres Row-Level Security on `projects` and
-`clients` as a database-enforced backstop for the shared-instance case —
-**verified end-to-end against a real local Postgres 18 instance
-(2026-09-20)**; see RISK_REGISTER.md and migration
-`0021_add_row_level_security`'s docstring.
+app-side, plus (2026-09-20) Postgres Row-Level Security on `projects`,
+`clients`, and every table nested under a project (`0021_add_row_level_security`,
+`0022_extend_rls_nested_tables`) as a database-enforced backstop for the
+shared-instance case — **verified end-to-end against a real local Postgres
+18 instance (2026-09-20)**; see RISK_REGISTER.md and those migrations'
+docstrings.
 
 ## Clients
 

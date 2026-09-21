@@ -172,6 +172,24 @@ If `pg_dump`/`pg_restore` aren't on `PATH`, pass `--pg-dump`/
 `--pg-restore` with the full path (they live alongside `psql.exe`, e.g.
 `S:\Program Files\PostgreSQL\18\bin\pg_dump.exe`).
 
+**`backup.py` and Row-Level Security (2026-09-20):** once RLS shipped
+(migrations `0021_add_row_level_security`/`0022_extend_rls_nested_tables`),
+`pg_dump` run as this app's own database role (the table owner, not a
+superuser) started failing outright against every `FORCE ROW LEVEL
+SECURITY` table — `query would be affected by row-level security policy`
+— since `pg_dump` has no session-variable hook to satisfy a policy's
+`USING` clause. `backup.py` now works around this itself: it discovers
+every table with `FORCE ROW LEVEL SECURITY` set (via `pg_class`, so it
+doesn't need updating as RLS covers more tables), lifts `FORCE` for the
+duration of the `pg_dump` call, and restores it immediately afterward in a
+`finally` (so a failed dump still leaves RLS enforced). Verified
+2026-09-20: ran end-to-end against the real dev database, produced a
+complete dump (same size as one taken by hand before RLS existed), and
+confirmed `FORCE ROW LEVEL SECURITY` was restored on all 11 covered tables
+afterward. This is a stopgap appropriate for this manual/dev-scale script;
+a real production backup role should instead have `BYPASSRLS`, which never
+hits this at all.
+
 **Verified 2026-09-16** against a real backup of the production database
 (23 projects, 201 source files, 244 MB of storage) restored into a
 disposable scratch database and storage directory — both the row counts
