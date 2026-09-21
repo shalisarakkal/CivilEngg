@@ -11,7 +11,7 @@ You need an account to use the application — there's no anonymous access.
 An administrator creates your account (see DEPLOYMENT.md/CLIENT_INSTALL.md
 for the first `sysadmin` account); there's no self-service sign-up.
 
-Three roles, in increasing order of access:
+Four roles, in increasing order of access:
 
 - **User** — full working access (upload, process, calculate, summarize,
   ask questions) on the specific projects you're associated with, but
@@ -22,15 +22,44 @@ Three roles, in increasing order of access:
   collaborators and delete/archive the project itself — a Power User
   who's just a collaborator (not the owner) can do everything except
   those two things.
-- **Admin** — everything, on every project, plus user management
-  (creating accounts, changing roles, disabling/enabling, reassigning a
-  project's owner when needed).
+- **Admin** — everything, on every project, client, and user account
+  *within your own organization* (see "Tenants" below), plus user
+  management (creating accounts, changing roles, disabling/enabling,
+  reassigning a project's owner when needed). Unlike a Power User, an
+  Admin has no project of their own to automatically become owner of —
+  creating a project as Admin requires choosing an existing Power User
+  as its owner.
+- **Platform Admin** — the API's most privileged role: everything an
+  Admin can do, but across *every* organization on a shared instance,
+  not just your own. Only meaningful on a shared/vendor-hosted install
+  serving more than one organization at once (see "Tenants" below) — a
+  dedicated, single-organization install has no reason to ever create
+  one. **This role is not yet usable from the workspace UI itself** —
+  the web app's own idea of "role" only recognizes User, Power User, and
+  Admin, so a Platform Admin signed into the workspace currently sees
+  *fewer* controls than an Admin would (e.g. no "Manage users" link),
+  not more. Today, a Platform Admin's extra reach — creating a new
+  organization, or acting across every organization's projects — is
+  usable only by calling the API directly (`POST`/`GET /tenants`, and
+  naming a `tenant_id` explicitly when creating a project/client/user).
 
 A disabled account can't log in; if it has a session already open, that
 session stops working on its next request rather than instantly. A
 project's owner must always be a Power User — if that account is
 disabled or deleted, an admin has to reassign ownership to another
 Power User first.
+
+### Tenants
+
+A "tenant" is the isolation boundary between separate organizations
+sharing one deployment of this application — each tenant's projects,
+clients, and users are invisible to every other tenant. If your
+organization has its own dedicated installation, this is invisible to
+you: everything belongs to one tenant automatically, and Admin already
+means "everything in the whole install." It only becomes visible on a
+shared, vendor-hosted install where more than one organization's data
+lives in the same install side by side — there, Admin's reach stops at
+your own organization's boundary, and only Platform Admin crosses it.
 
 ## What it does
 
