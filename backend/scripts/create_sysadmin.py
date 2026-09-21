@@ -30,13 +30,35 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from civil_engineering.auth import ROLE_ADMIN, ROLE_POWER_USER, hash_password
-from civil_engineering.database import SessionLocal
+from civil_engineering.database import SessionLocal, _set_rls_session_variables
 from civil_engineering.models import Client, Project, Tenant, User
 
 SYSADMIN_USERNAME = "sysadmin"
 DEFAULT_TENANT_NAME = "Default"
+
+
+def _bypass_rls_for_backfill(database: Session) -> None:
+    """This script's whole job is finding and fixing rows Row-Level Security
+    would otherwise hide -- tenant-less projects/clients under FORCE ROW
+    LEVEL SECURITY (migration 0021_add_row_level_security). Without this,
+    the backfill queries below see zero rows and silently do nothing: no
+    error, no warning, just a bootstrap script that appears to succeed while
+    leaving every pre-existing project/client permanently tenant-less (found
+    2026-09-21 running this against a real Postgres instance with RLS
+    already applied -- every prior verification of this script had only
+    ever run before RLS existed). No-op on SQLite (this session variable
+    mechanism is Postgres-only). Must be called again after every commit,
+    same as auth.py's own use of this helper: SET LOCAL / set_config(...,
+    true) semantics don't survive one, and this script commits multiple
+    times."""
+    if database.get_bind().dialect.name != "postgresql":
+        return
+    _set_rls_session_variables(
+        database.connection(), {"rls_tenant_id": None, "rls_is_platform_admin": True}
+    )
 
 
 def main() -> None:
@@ -94,6 +116,7 @@ def main() -> None:
         else:
             print(f"'{DEFAULT_TENANT_NAME}' tenant already exists; leaving it unchanged.")
 
+        _bypass_rls_for_backfill(database)
         tenantless_count = 0
         for model in (User, Client, Project):
             tenantless = (
@@ -109,6 +132,7 @@ def main() -> None:
                 f"'{DEFAULT_TENANT_NAME}' tenant."
             )
 
+        _bypass_rls_for_backfill(database)
         ownerless = (
             database.execute(select(Project).where(Project.owner_id.is_(None))).scalars().all()
         )

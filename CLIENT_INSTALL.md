@@ -229,6 +229,12 @@ or any file — unset them immediately after, as shown above. Re-running
 this script against an existing sysadmin that predates `SYSADMIN_EMAIL`
 backfills its email instead of erroring.
 
+A Row-Level Security bug in this script's tenant/owner backfill (found
+2026-09-21) was fixed after this document's own migration head was
+current — see DEPLOYMENT.md's note on it. If your install's database
+predates that fix, re-running this script now is safe and will report
+how many additional rows it backfills.
+
 ### 6. Build and start
 
 ```powershell

@@ -82,6 +82,22 @@ project onto it. See DECISIONS.md ADR-010 and RISK_REGISTER.md: this is
 schema/bootstrap only and doesn't change anything about running a single,
 dedicated instance.
 
+**Row-Level Security bug found and fixed 2026-09-21:** once migrations
+`0021_add_row_level_security`/`0022_extend_rls_nested_tables` shipped,
+this script's own tenant/owner backfill queries against `projects`/
+`clients` started silently returning zero rows — `FORCE ROW LEVEL
+SECURITY` blocked the script's own plain `SessionLocal()` session from
+seeing *any* row on those tables, since it set no `app.current_tenant_id`/
+`app.is_platform_admin` session variable, and RLS fails closed. The
+script printed no error and looked like it succeeded while leaving every
+pre-existing project/client permanently tenant-less. Fixed by having the
+backfill queries set the same `app.is_platform_admin` bypass the running
+app itself uses for a `platform_admin` caller, re-applied after every
+`commit()` since that variable is transaction-scoped. If you ran this
+script against a real Postgres instance after RLS shipped but before
+this fix, re-run it now — it's safe and idempotent, and will report how
+many additional rows it backfills.
+
 ## 4. Environment and secrets checklist
 
 - `.env` is already gitignored (`.gitignore`) — never commit it. Only
