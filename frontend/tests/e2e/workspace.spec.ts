@@ -990,6 +990,41 @@ test.describe("project workspace", () => {
     await page.getByRole("button", { name: "Upload file" }).click();
     await expect.poll(() => uploadedNames).toEqual(["a.csv", "b.csv"]);
   });
+
+  test("Add collaborator falls back to a single-username lookup when the caller can't list every user (Power User owner)", async ({
+    page,
+  }) => {
+    // GET /users is admin-only; a Power User project owner (who can also
+    // open this modal) gets a 403 there and has no way to browse/multi-select
+    // candidates, so falls back to the original one-at-a-time flow instead
+    // of an empty, broken list.
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
+    await page.route(`${API}/users/lookup*`, (route) =>
+      json(route, { id: "found-user-id", username: "jsmith" }),
+    );
+    let postBody: unknown = null;
+    await page.route(`${API}/projects/${PROJECT.id}/members`, async (route) => {
+      if (route.request().method() === "POST") {
+        postBody = route.request().postDataJSON();
+        return json(route, {}, 201);
+      }
+      return json(route, []);
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+    await page.getByRole("button", { name: "Add collaborator" }).click();
+
+    await expect(page.locator(".collaborator-candidate-list")).toHaveCount(0);
+    const usernameInput = page.locator("#new-collaborator-username");
+    await expect(usernameInput).toBeVisible();
+    await usernameInput.fill("jsmith");
+    await page.getByRole("button", { name: "Add collaborator" }).nth(1).click();
+
+    await expect(page.getByText("jsmith was added to Oak Street Site.")).toBeVisible();
+    expect(postBody).toEqual({ user_id: "found-user-id" });
+  });
 });
 
 test.describe("project workspace as admin", () => {
@@ -1101,5 +1136,64 @@ test.describe("project workspace as admin", () => {
     await expect(
       page.getByText("A project owner must belong to the project's own tenant"),
     ).toBeVisible();
+  });
+
+  test("Add collaborator supports multi-select, adding several collaborators in one go", async ({
+    page,
+  }) => {
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
+    await page.route(`${API}/users`, (route) =>
+      json(route, [
+        // Already the owner -- must not appear as a candidate.
+        { id: PROJECT.owner_id, username: "owner_user", role: "power_user", disabled_at: null },
+        // Already a member -- must not appear as a candidate either.
+        { id: "existing-member", username: "existing_member", role: "user", disabled_at: null },
+        { id: "u-1", username: "jsmith", role: "user", disabled_at: null },
+        { id: "pu-1", username: "pu_jane", role: "power_user", disabled_at: null },
+        { id: "disabled-1", username: "disabled_user", role: "user", disabled_at: "2026-01-01T00:00:00Z" },
+        { id: "admin-1", username: "another_admin", role: "admin", disabled_at: null },
+      ]),
+    );
+    const postedUserIds: string[] = [];
+    await page.route(`${API}/projects/${PROJECT.id}/members`, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON() as { user_id: string };
+        postedUserIds.push(body.user_id);
+        return json(route, {}, 201);
+      }
+      return json(route, [
+        {
+          id: "membership-1",
+          project_id: PROJECT.id,
+          user_id: "existing-member",
+          username: "existing_member",
+          role: "user",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ]);
+    });
+
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
+    await page.getByRole("button", { name: "Add collaborator" }).click();
+
+    const list = page.locator(".collaborator-candidate-list");
+    // Only jsmith and pu_jane are eligible: owner_user is the owner,
+    // existing_member is already a collaborator, disabled_user is disabled,
+    // and another_admin isn't a User/Power User.
+    await expect(list.locator("li")).toHaveCount(2);
+    await expect(list.getByText("owner_user")).toHaveCount(0);
+    await expect(list.getByText("existing_member")).toHaveCount(0);
+    await expect(list.getByText("disabled_user")).toHaveCount(0);
+    await expect(list.getByText("another_admin")).toHaveCount(0);
+
+    await list.getByText("jsmith").click();
+    await list.getByText("pu_jane").click();
+    await page.getByRole("button", { name: /^Add 2 collaborators$/ }).click();
+
+    await expect(page.getByText("2 collaborator(s) added.")).toBeVisible();
+    expect(postedUserIds.sort()).toEqual(["pu-1", "u-1"]);
   });
 });

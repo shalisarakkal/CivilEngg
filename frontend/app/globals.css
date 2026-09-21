@@ -124,6 +124,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .confirm-modal h3 { font-size: 30px; margin: 8px 0 14px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 25px; }
 .modal-actions .danger-button { padding: 10px 14px; }
+.collaborator-candidate-list { list-style: none; margin: 0; max-height: 240px; overflow-y: auto; padding: 0; }
+.collaborator-candidate-list li { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.collaborator-candidate-list li:last-child { border-bottom: 0; }
+.collaborator-candidate-list label { align-items: center; cursor: pointer; display: flex; gap: 10px; }
+.collaborator-candidate-list small { color: var(--muted); font: 700 10px Arial, sans-serif; text-transform: uppercase; }
 .workspace-section { border-top: 1px solid var(--line); margin-top: 40px; padding-top: 26px; }
 .section-heading { align-items: flex-start; display: flex; justify-content: space-between; }
 .section-heading h3 { font-size: 27px; margin: 8px 0 18px; }

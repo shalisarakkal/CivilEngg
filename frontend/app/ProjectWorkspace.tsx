@@ -193,6 +193,20 @@ function summarizeSelection(results: BatchResult[]): string {
   return `${selected} file(s) selected for upload, ${rejected} rejected (unsupported type).`;
 }
 
+// "collaborator(s)", not "file(s)" -- summarizeBatchResult's wording is
+// hardcoded for files, so adding several collaborators at once gets its own.
+function summarizeCollaboratorResults(results: BatchResult[]): string {
+  if (results.length === 1) {
+    const [only] = results;
+    return only.ok ? `${only.name} added.` : `${only.name} could not be added: ${only.detail}`;
+  }
+  const succeeded = results.filter((result) => result.ok).length;
+  const failed = results.length - succeeded;
+  if (failed === 0) return `${succeeded} collaborator(s) added.`;
+  if (succeeded === 0) return `All ${failed} collaborator(s) failed to be added.`;
+  return `${succeeded} of ${results.length} collaborator(s) added, ${failed} failed.`;
+}
+
 function groupBatchResults(results: BatchResult[], successLabel: string): { label: string; items: BatchResult[] }[] {
   const groups: { label: string; items: BatchResult[] }[] = [
     { label: successLabel, items: results.filter((result) => result.ok && !result.skipped) },
@@ -285,6 +299,15 @@ export default function ProjectWorkspace() {
   const [addCollaboratorProject, setAddCollaboratorProject] = useState<Project | null>(null);
   const [newCollaboratorUsername, setNewCollaboratorUsername] = useState("");
   const [addingCollaborator, setAddingCollaborator] = useState(false);
+  // Multi-select candidate list, built from GET /users -- admin-only, so a
+  // Power User project owner (who can also open this modal, but has no API
+  // access to list every user) falls back to the single-username lookup
+  // flow above instead when this fetch 403s.
+  const [collaboratorCandidates, setCollaboratorCandidates] = useState<
+    { id: string; username: string; role: string }[]
+  >([]);
+  const [selectedCollaboratorIds, setSelectedCollaboratorIds] = useState<Set<string>>(new Set());
+  const [collaboratorListUnavailable, setCollaboratorListUnavailable] = useState(false);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [calculations, setCalculations] = useState<Calculation[]>([]);
@@ -534,6 +557,80 @@ export default function ProjectWorkspace() {
       }
     } finally {
       setReassigningOwner(false);
+    }
+  }
+
+  async function openAddCollaborator(project: Project) {
+    setNewCollaboratorUsername("");
+    setSelectedCollaboratorIds(new Set());
+    setCollaboratorCandidates([]);
+    setCollaboratorListUnavailable(false);
+    setAddCollaboratorProject(project);
+    const [usersResponse, membersResponse] = await Promise.all([
+      apiFetch(`${apiUrl}/users`),
+      apiFetch(`${apiUrl}/projects/${project.id}/members`),
+    ]);
+    if (!usersResponse.ok) {
+      // GET /users is admin-only -- a Power User project owner (who can
+      // also open this modal) gets a 403 here, so fall back to the
+      // single-username lookup form below instead of an empty list.
+      setCollaboratorListUnavailable(true);
+      return;
+    }
+    const allUsers: { id: string; username: string; role: string; disabled_at: string | null }[] =
+      await usersResponse.json();
+    const existingMembers: ProjectMember[] = membersResponse.ok ? await membersResponse.json() : [];
+    const existingMemberIds = new Set(existingMembers.map((member) => member.user_id));
+    setCollaboratorCandidates(
+      allUsers
+        .filter((user) => user.role === "user" || user.role === "power_user")
+        .filter((user) => user.disabled_at === null)
+        .filter((user) => user.id !== project.owner_id && !existingMemberIds.has(user.id))
+        .map((user) => ({ id: user.id, username: user.username, role: user.role })),
+    );
+  }
+
+  function toggleCollaboratorCandidate(id: string) {
+    setSelectedCollaboratorIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmAddCollaborators(event: FormEvent) {
+    event.preventDefault();
+    if (!addCollaboratorProject || selectedCollaboratorIds.size === 0) return;
+    const project = addCollaboratorProject;
+    const targets = collaboratorCandidates.filter((candidate) => selectedCollaboratorIds.has(candidate.id));
+    setAddingCollaborator(true);
+    try {
+      const results = await Promise.all(
+        targets.map(async (candidate): Promise<BatchResult> => {
+          try {
+            const response = await apiFetch(`${apiUrl}/projects/${project.id}/members`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: candidate.id }),
+            });
+            if (response.ok) return { name: candidate.username, ok: true, detail: "" };
+            const error = await response.json().catch(() => ({}));
+            return { name: candidate.username, ok: false, detail: errorMessage(error, `HTTP ${response.status}`) };
+          } catch (error) {
+            return {
+              name: candidate.username,
+              ok: false,
+              detail: error instanceof Error ? error.message : "request failed",
+            };
+          }
+        }),
+      );
+      setMessage(summarizeCollaboratorResults(results), results.length > 1 ? results : null, "Added");
+      setAddCollaboratorProject(null);
+      setSelectedCollaboratorIds(new Set());
+    } finally {
+      setAddingCollaborator(false);
     }
   }
 
@@ -1476,7 +1573,7 @@ export default function ProjectWorkspace() {
         </aside>
         <section className="project-detail">
           {selectedProject ? <>
-            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><div style={{ display: "flex", gap: 12 }}>{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => { setNewCollaboratorUsername(""); setAddCollaboratorProject(selectedProject); }}>Add collaborator</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openOwnerReassign(selectedProject)}>Reassign owner</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button>}</div></div>
+            <div className="detail-heading"><div><p className="eyebrow">Active project</p><h2>{selectedProject.name}</h2></div><div style={{ display: "flex", gap: 12 }}>{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openAddCollaborator(selectedProject)}>Add collaborator</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="secondary-button" onClick={() => void openOwnerReassign(selectedProject)}>Reassign owner</button>}{(currentUser.role === "admin" || currentUser.id === selectedProject.owner_id) && <button className="danger-button" onClick={() => setProjectPendingArchive(selectedProject)}>Archive project</button>}</div></div>
             <div className={`upload-panel ${isDraggingFiles ? "drag-active" : ""}`} onDragOver={handleUploadDragOver} onDragLeave={handleUploadDragLeave} onDrop={handleUploadDrop}><div><p className="eyebrow">Source files</p><h3>Bring the plan into focus.</h3><p className="muted">PDF, DXF, CSV, TXT, TIFF, and LandXML files up to 50 MB. Select several at once, or drag and drop them here.</p>{isDraggingFiles && <p className="drag-hint">Drop files to add them for upload...</p>}</div><form className="upload-form" onSubmit={(event) => { event.preventDefault(); void uploadFiles(pendingFiles); }}><label className="file-picker" htmlFor="source-file"><span>{pendingFiles.length > 0 ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose source file(s)"}</span><input id="source-file" type="file" multiple accept=".pdf,.dxf,.csv,.txt,.tif,.tiff,.xml" disabled={uploading} onChange={(event) => stageFiles(Array.from(event.target.files ?? []))} /></label><div className="upload-form-actions"><button type="submit" disabled={loading || pendingFiles.length === 0}>{`Upload file${pendingFiles.length === 1 ? "" : "s"}`}</button>{pendingFiles.length > 0 && <button type="button" className="secondary-button" disabled={loading} onClick={cancelFileSelection}>Cancel</button>}</div></form></div>
             <div className="file-list">
               <div className="list-heading"><span className="select-all"><input type="checkbox" checked={visibleFiles.length > 0 && visibleFiles.every((file) => selectedFileIds.has(file.id))} onChange={() => toggleSelectAllFiles(visibleFiles)} disabled={batchBusy !== null || visibleFiles.length === 0} /><span>File</span></span><span>Status / actions</span></div>
@@ -1506,7 +1603,104 @@ export default function ProjectWorkspace() {
         </section>
       </section>
       {projectPendingArchive && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-archive-title"><p className="eyebrow">Archive project</p><h3 id="project-archive-title">Archive {projectPendingArchive.name}?</h3><p className="muted">The project will be hidden from the workspace and moved to the admin archive, along with everything in it — its files, revisions, calculations, summaries, and questions become inaccessible until you restore it. Nothing is deleted; restoring brings it all back exactly as it was.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => setProjectPendingArchive(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-archive:${projectPendingArchive.id}`} onClick={() => void confirmArchiveProject()}>{busyAction === `project-archive:${projectPendingArchive.id}` ? "Archiving..." : "Archive project"}</button></div></section></div>}
-      {addCollaboratorProject && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="add-collaborator-title"><p className="eyebrow">Add collaborator</p><h3 id="add-collaborator-title">Add a collaborator to {addCollaboratorProject.name}?</h3><p className="muted">They get full working access (upload, process, calculate, ask questions); a Power User also gets archive/purge rights. Enter their exact username.</p><form onSubmit={confirmAddCollaborator}><label htmlFor="new-collaborator-username">Username</label><input id="new-collaborator-username" value={newCollaboratorUsername} onChange={(event) => setNewCollaboratorUsername(event.target.value)} required autoFocus /><div className="modal-actions"><button type="button" className="secondary-button" disabled={addingCollaborator} onClick={() => setAddCollaboratorProject(null)}>Cancel</button><button type="submit" className="danger-button" disabled={addingCollaborator || !newCollaboratorUsername.trim()}>{addingCollaborator ? "Adding..." : "Add collaborator"}</button></div></form></section></div>}
+      {addCollaboratorProject && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-collaborator-title"
+          >
+            <p className="eyebrow">Add collaborator</p>
+            <h3 id="add-collaborator-title">Add collaborators to {addCollaboratorProject.name}?</h3>
+            <p className="muted">
+              They get full working access (upload, process, calculate, ask questions); a Power
+              User also gets archive/purge rights.
+            </p>
+            {collaboratorListUnavailable ? (
+              // GET /users is admin-only -- a Power User project owner has
+              // no API access to list every user, so falls back to the
+              // original one-at-a-time lookup instead of an empty list.
+              <form onSubmit={confirmAddCollaborator}>
+                <label htmlFor="new-collaborator-username">Username</label>
+                <input
+                  id="new-collaborator-username"
+                  value={newCollaboratorUsername}
+                  onChange={(event) => setNewCollaboratorUsername(event.target.value)}
+                  required
+                  autoFocus
+                />
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={addingCollaborator}
+                    onClick={() => setAddCollaboratorProject(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="danger-button"
+                    disabled={addingCollaborator || !newCollaboratorUsername.trim()}
+                  >
+                    {addingCollaborator ? "Adding..." : "Add collaborator"}
+                  </button>
+                </div>
+              </form>
+            ) : collaboratorCandidates.length === 0 ? (
+              <>
+                <p className="muted">
+                  No eligible users to add — everyone active is already a collaborator, is the
+                  owner, or has no User/Power User account.
+                </p>
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setAddCollaboratorProject(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : (
+              <form onSubmit={confirmAddCollaborators}>
+                <ul className="collaborator-candidate-list">
+                  {collaboratorCandidates.map((candidate) => (
+                    <li key={candidate.id}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={selectedCollaboratorIds.has(candidate.id)}
+                          onChange={() => toggleCollaboratorCandidate(candidate.id)}
+                        />
+                        <span>{candidate.username}</span>
+                        <small>{candidate.role.replace("_", " ")}</small>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={addingCollaborator}
+                    onClick={() => setAddCollaboratorProject(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="danger-button" disabled={addingCollaborator || selectedCollaboratorIds.size === 0}>
+                    {addingCollaborator
+                      ? "Adding..."
+                      : `Add ${selectedCollaboratorIds.size || ""} collaborator${selectedCollaboratorIds.size === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        </div>
+      )}
       {ownerReassignProject && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="owner-reassign-title"><p className="eyebrow">Reassign owner</p><h3 id="owner-reassign-title">Change the owner of {ownerReassignProject.name}?</h3><p className="muted">The new owner must be a Power User already collaborating on this project. Ownership moves to them immediately; you keep your own access unless removed separately.</p>{ownerReassignCandidates.length === 0 ? <p className="muted">No Power User collaborators on this project yet — use &quot;Add collaborator&quot; first.</p> : <form onSubmit={confirmReassignOwner}><label htmlFor="new-owner">New owner</label><select id="new-owner" value={newOwnerId} onChange={(event) => setNewOwnerId(event.target.value)} required><option value="" disabled>Choose a Power User</option>{ownerReassignCandidates.map((member) => <option key={member.user_id} value={member.user_id}>{member.username}</option>)}</select><div className="modal-actions"><button type="button" className="secondary-button" disabled={reassigningOwner} onClick={() => setOwnerReassignProject(null)}>Cancel</button><button type="submit" className="danger-button" disabled={reassigningOwner || !newOwnerId}>{reassigningOwner ? "Changing..." : "Change owner"}</button></div></form>}{ownerReassignCandidates.length === 0 && <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setOwnerReassignProject(null)}>Close</button></div>}</section></div>}
       {projectPendingPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="project-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="project-purge-title">Permanently delete {projectPendingPurge.name}?</h3><p className="muted">This removes the project, all its files, revisions, calculations, summaries, and questions, and its on-disk storage — permanently. This cannot be undone.</p><div className="modal-actions"><button className="secondary-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => setProjectPendingPurge(null)}>Cancel</button><button className="danger-button" disabled={busyAction === `project-purge:${projectPendingPurge.id}`} onClick={() => void confirmPurgeArchivedProject()}>{busyAction === `project-purge:${projectPendingPurge.id}` ? "Purging..." : "Permanently delete"}</button></div></section></div>}
       {archivedFilesPendingBatchPurge && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-purge-title"><p className="eyebrow">Permanent purge</p><h3 id="batch-purge-title">Permanently delete {archivedFilesPendingBatchPurge.length} file{archivedFilesPendingBatchPurge.length === 1 ? "" : "s"}?</h3><p className="muted">{archivedFilesPendingBatchPurge.map((file) => file.original_name).join(", ")}</p><p className="muted">This removes each archived file and its metadata. Accepted revisions and calculations remain, but the original sources cannot be restored.</p><div className="modal-actions"><button className="secondary-button" disabled={batchBusy !== null} onClick={() => setArchivedFilesPendingBatchPurge(null)}>Cancel</button><button className="danger-button" disabled={batchBusy !== null} onClick={() => void confirmBatchPurgeArchivedFiles()}>{batchBusy === "purge" ? "Purging..." : "Permanently delete"}</button></div></section></div>}

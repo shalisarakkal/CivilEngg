@@ -147,6 +147,13 @@ site model, not against a file that has only been processed.
 - Uploading a file that duplicates one already in the project (by
   content, not just name) is detected and rejected, including against
   archived files.
+- "Add collaborator" (project owner or Admin) supports adding several
+  people at once: an Admin sees a checklist of every eligible User/Power
+  User in the organization (already-added collaborators, the owner, and
+  disabled accounts are excluded automatically) and can select as many
+  as needed before submitting. A Power User project owner instead adds
+  one person at a time by exact username — the organization's full user
+  list isn't visible to a non-Admin account.
 
 ## Known limitations
 
@@ -155,9 +162,6 @@ use:
 
 - No OCR yet — a scanned/image-only PDF page or a TIFF produces a
   warning rather than extracted text/geometry.
-- There's still no "add collaborator" UI — a Power User owner can
-  reassign ownership to an *existing* collaborator, but can't add a new
-  one without calling the API directly (see PLAN.md Phase 15).
 - A project's coordinate reference system must be projected, not
   geographic (lat/lon degrees): distances, areas, and perimeters are
   measured on a plane. A geographic CRS is now refused when you set it,
