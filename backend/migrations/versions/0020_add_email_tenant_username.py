@@ -17,6 +17,21 @@ The original single-column uniqueness on username was created inline
 (`unique=True`) in migration 0017, so Postgres auto-named its constraint
 rather than this codebase choosing a name -- looked up here via
 information_schema instead of hardcoding a guess at that generated name.
+
+Verified against a real local Postgres 18 instance (2026-09-20), which
+found and fixed two real bugs no SQLite-backed test could catch: (1) this
+file's revision id was originally the much longer
+`0020_add_user_email_tenant_scoped_username` (42 chars), which alembic
+happily accepted at write time but failed at `alembic upgrade` with
+"value too long for type character varying(32)" -- `alembic_version.
+version_num` is `varchar(32)`, and every revision id in this project must
+fit that column; renamed to this shorter id (matches migration 0018's,
+which is exactly 32 chars, the longest that still fits). (2) the
+constraint-name lookup query below originally compared `array_agg(kcu.
+column_name)` (an `information_schema.sql_identifier[]`) directly against
+`ARRAY['username']` (a `text[]`) with no cast, which Postgres rejects as
+"operator does not exist" since no `=` is defined between those two array
+types -- fixed with the explicit `::text`/`::text[]` casts below.
 """
 
 from typing import Sequence, Union
@@ -24,7 +39,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0020_add_user_email_tenant_scoped_username"
+revision: str = "0020_add_email_tenant_username"
 down_revision: Union[str, None] = "0019_add_tenants"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -39,7 +54,7 @@ _ORIGINAL_USERNAME_CONSTRAINT_LOOKUP = """
       AND tc.constraint_type = 'UNIQUE'
       AND tc.table_schema = 'public'
     GROUP BY tc.constraint_name
-    HAVING array_agg(kcu.column_name) = ARRAY['username']
+    HAVING array_agg(kcu.column_name::text) = ARRAY['username']::text[]
 """
 
 

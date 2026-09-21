@@ -52,9 +52,9 @@ which tenant's "jsmith" is meant, while `email` is unique install-wide.
 lowercased on write and returned on `UserResponse`. This is enforced
 app-side, plus (2026-09-20) Postgres Row-Level Security on `projects` and
 `clients` as a database-enforced backstop for the shared-instance case —
-**written but unverified against a real Postgres instance**, since this
-environment has no live Postgres available; see RISK_REGISTER.md and
-migration `0021_add_row_level_security`'s docstring.
+**verified end-to-end against a real local Postgres 18 instance
+(2026-09-20)**; see RISK_REGISTER.md and migration
+`0021_add_row_level_security`'s docstring.
 
 ## Clients
 

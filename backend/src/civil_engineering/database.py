@@ -62,12 +62,19 @@ def _apply_tenant_rls_context(
 
 
 def _set_rls_session_variables(connection: _ExecutesSql, info: dict[Any, Any]) -> None:
+    # set_config(..., true), not `SET LOCAL app.x = :value` -- Postgres's SET
+    # command syntax has no placeholder for a bound parameter at all (proven
+    # against a real instance: it raises "syntax error at or near $1",
+    # something no SQLite-backed test can ever exercise, since this whole
+    # function is skipped on every non-Postgres dialect). set_config() is a
+    # normal function call, so ordinary bind parameters work, and its third
+    # argument (is_local=true) is transaction-scoped exactly like SET LOCAL.
     connection.execute(
-        text("SET LOCAL app.current_tenant_id = :value"),
+        text("SELECT set_config('app.current_tenant_id', :value, true)"),
         {"value": info.get("rls_tenant_id") or ""},
     )
     connection.execute(
-        text("SET LOCAL app.is_platform_admin = :value"),
+        text("SELECT set_config('app.is_platform_admin', :value, true)"),
         {"value": "true" if info.get("rls_is_platform_admin") else "false"},
     )
 

@@ -697,7 +697,7 @@ than three different data models.
 
 - [x] Email as the login identifier, and `username` uniqueness moved from
   global to per-`(tenant_id, username)` (2026-09-20, migration
-  `0020_add_user_email_tenant_scoped_username`): relaxing `username`
+  `0020_add_email_tenant_username`): relaxing `username`
   uniqueness alone would make login ambiguous — nothing said which tenant's
   "jsmith" was meant. `User.email` is a new globally-unique, nullable
   (pre-existing rows), lowercased column; `LoginRequest` now takes `email`
@@ -712,27 +712,40 @@ than three different data models.
   UNIQUE constraint error, restored the fix.
 - [x] Postgres Row-Level Security as a database-enforced backstop for the
   shared-instance case (2026-09-20, migration `0021_add_row_level_security`)
-  — **written but UNVERIFIED against a real Postgres instance**, since this
-  environment has no live Postgres to run any migration against (not just
-  this one — confirmed migration `0001`'s `CREATE EXTENSION postgis` also
-  can't run here). Enables `FORCE ROW LEVEL SECURITY` (not just `ENABLE` —
-  Postgres exempts a table's owner by default, which this app's role
-  normally is) plus a `tenant_isolation` policy on `projects` and `clients`
-  only, reading `app.current_tenant_id`/`app.is_platform_admin` session
-  variables that `auth.py`'s `get_current_user` and a `database.py` Session
-  `after_begin` listener set on every transaction (`SET LOCAL` only lasts
-  one transaction, and many routes call `database.commit()` more than once
-  per request). Deliberately excludes `users` (the account lookup that
+  — **verified end-to-end against a real local Postgres 18 instance**
+  (2026-09-20, once one became available in this environment). Enables
+  `FORCE ROW LEVEL SECURITY` (not just `ENABLE` — Postgres exempts a
+  table's owner by default, which this app's role normally is) plus a
+  `tenant_isolation` policy on `projects` and `clients` only, reading
+  `app.current_tenant_id`/`app.is_platform_admin` session variables that
+  `auth.py`'s `get_current_user` and a `database.py` Session `after_begin`
+  listener set on every transaction (`SET LOCAL` semantics only last one
+  transaction, and many routes call `database.commit()` more than once per
+  request). Deliberately excludes `users` (the account lookup that
   determines the tenant context happens before that context exists — a
   bootstrapping problem the app-layer checks don't have) and every table
   nested under `Project` (source_files, processing_jobs, site_model_entities,
   etc.) — both documented as explicit scope limits in the migration's
   docstring, not oversights. Unit tests
   (`backend/tests/test_row_level_security.py`) cover the session-variable
-  logic in isolation against a fake connection; they do not and cannot
-  confirm Postgres actually accepts/enforces the policies. **Must be
-  verified against a real Postgres instance before any shared-instance
-  deployment relies on it.**
+  logic in isolation against a fake connection; the real-Postgres pass
+  covered what they can't: migrations 0019-0021 applied cleanly to a
+  pre-existing dev database, `FORCE ROW LEVEL SECURITY` and the
+  `tenant_isolation` policy confirmed directly via `pg_class`/`pg_policies`,
+  actual row isolation proven in psql (tenant A sees only its own row,
+  tenant B only its own, `platform_admin` sees both, no session context
+  fails closed, a cross-tenant `UPDATE` affects 0 rows), and the same
+  proven again through the real running FastAPI app over HTTP (login by
+  email, `POST /tenants`, a tenant-scoped admin created via the API seeing
+  only its own tenant's clients). That pass found and fixed two real bugs:
+  migration `0020`'s constraint-name lookup needed explicit `::text` casts
+  (Postgres has no `=` between `sql_identifier[]` and `text[]`), and
+  `_set_rls_session_variables` originally used `SET LOCAL app.x = :value`,
+  which is a hard Postgres syntax error — the `SET` command's grammar has
+  no placeholder for a bound parameter at all — now fixed to use
+  `set_config(name, :value, true)`. Neither bug was catchable by the
+  SQLite-backed suite, since this whole code path is skipped on every
+  non-Postgres dialect.
 - [x] A tenant provisioning API (2026-09-20): `POST /tenants` and
   `GET /tenants`, both `platform_admin`-only (`require_platform_admin`,
   previously unused plumbing from the role-split slice). A platform_admin
@@ -764,12 +777,12 @@ each is its own follow-on phase, not a checklist item here:
   `platform_admin` still sees/manages everything, verified by
   `backend/tests/test_tenant_isolation.py`
 - [x] Per-tenant `username` uniqueness, a tenant provisioning API, and a
-  written Row-Level Security backstop are all in place — a shared instance
-  is now operable end-to-end through the API alone. Remaining caveat: the
-  RLS migration is unverified against a real Postgres instance (no live
-  Postgres available in this environment) and must be confirmed before a
-  shared-instance deployment relies on it as an enforcement layer rather
-  than defense-in-depth on top of the (verified) app-layer scoping.
+  Row-Level Security backstop are all in place and verified — a shared
+  instance is now operable end-to-end through the API alone, and RLS has
+  been confirmed working against a real local Postgres 18 instance
+  (2026-09-20), not just written by reasoning about it. Remaining scope
+  gap, not a verification gap: RLS covers only `projects`/`clients`, not
+  every table nested under `Project` (see "Explicitly not done" above).
 
 ## 5. Testing Strategy
 

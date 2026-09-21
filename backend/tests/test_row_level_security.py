@@ -2,12 +2,20 @@
 (migration 0021_add_row_level_security, PLAN.md Phase 16). This tests the
 pure decision logic in isolation -- what SQL and values get sent, given a
 tenant context -- using a fake connection object rather than a real
-database. It does NOT verify that Postgres actually accepts and enforces
-the resulting policies; that needs a real Postgres instance, which this
-environment doesn't have (see the migration's own docstring). The rest of
-this suite (test_auth.py, test_tenant_isolation.py) already confirms the
-SQLite no-op path is silently correct: all of it runs against SQLite and
-none of it ever attempts to execute this Postgres-only SQL.
+database. The rest of this suite (test_auth.py, test_tenant_isolation.py)
+already confirms the SQLite no-op path is silently correct: all of it runs
+against SQLite and none of it ever attempts to execute this Postgres-only
+SQL.
+
+The actual Postgres enforcement (RLS policies, FORCE ROW LEVEL SECURITY,
+and this module's set_config() calls) has been verified end-to-end against
+a real local Postgres 18 instance (2026-09-20) -- see PLAN.md Phase 16 and
+RISK_REGISTER.md. That exercise is exactly why this function calls
+set_config() rather than `SET LOCAL app.x = :value`: the latter looked
+correct and passed every test here, but Postgres's SET command syntax has
+no placeholder for a bound parameter at all, and raises a syntax error the
+first time it actually runs -- something no SQLite-backed unit test can
+catch, since this whole function is skipped on every non-Postgres dialect.
 """
 
 from typing import Any
@@ -34,9 +42,9 @@ def test_sets_the_tenant_id_and_platform_admin_flag_from_session_info() -> None:
     assert len(connection.calls) == 2
     tenant_sql, tenant_params = connection.calls[0]
     admin_sql, admin_params = connection.calls[1]
-    assert "SET LOCAL app.current_tenant_id" in tenant_sql
+    assert "set_config('app.current_tenant_id'" in tenant_sql
     assert tenant_params == {"value": "tenant-123"}
-    assert "SET LOCAL app.is_platform_admin" in admin_sql
+    assert "set_config('app.is_platform_admin'" in admin_sql
     assert admin_params == {"value": "false"}
 
 

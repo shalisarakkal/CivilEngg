@@ -2,12 +2,26 @@
 database-enforced backstop for tenant isolation, for the shared-instance
 case specifically (PLAN.md Phase 16, DECISIONS.md ADR-010).
 
-UNVERIFIED against a real Postgres instance -- this environment has no live
-Postgres to test the migration chain against (confirmed: even migration
-0001's `CREATE EXTENSION postgis` can't run outside Postgres, so this whole
-chain has never been runnable here). Written by careful reasoning about
-Postgres's RLS semantics, not confirmed by actually running it. Verify
-before relying on it in a real shared-instance deployment.
+Verified end-to-end against a real local Postgres 18 instance (2026-09-20):
+migrations 0019-0021 applied to a pre-existing dev database, FORCE ROW LEVEL
+SECURITY confirmed via pg_class, the tenant_isolation policy confirmed via
+pg_policies, and actual row isolation proven both directly in psql (tenant A
+sees only its own row, tenant B only its own, platform_admin sees both, no
+session context fails closed, a cross-tenant UPDATE affects 0 rows) and
+through the real FastAPI app over HTTP (login by email, POST /tenants,
+tenant-scoped admin creation, cross-tenant client-list isolation). That
+verification pass found and fixed two real bugs this migration and its
+support code had: this migration's original-constraint lookup compared
+`array_agg` of `information_schema.sql_identifier` against a `text[]`
+literal with no operator between them (needed an explicit `::text`/`::text[]`
+cast), and `_set_rls_session_variables` (database.py) originally used
+`SET LOCAL app.x = :value` -- which raises a hard syntax error in Postgres,
+since the `SET` command's grammar has no placeholder for a bound parameter
+at all -- now fixed to use `set_config(name, :value, true)`, an ordinary
+function call that both takes bind parameters and is transaction-scoped
+exactly like SET LOCAL. Neither bug was catchable by the SQLite-backed test
+suite, since this whole code path is skipped on every non-Postgres dialect
+-- which is exactly why this real-Postgres pass mattered.
 
 Scope: `projects` and `clients` only -- the two tables that actually carry
 `tenant_id`. Deliberately NOT `users`: the very first thing
@@ -42,7 +56,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "0021_add_row_level_security"
-down_revision: Union[str, None] = "0020_add_user_email_tenant_scoped_username"
+down_revision: Union[str, None] = "0020_add_email_tenant_username"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

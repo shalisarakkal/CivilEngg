@@ -116,6 +116,65 @@ Return to the project root:
 Set-Location "S:\AI-Projects\Civil Engineering"
 ```
 
+### 3a. Verify Row-Level Security (Postgres-specific migrations)
+
+Automated tests run on SQLite for speed and never execute Postgres-only SQL
+(`SET`/`set_config`/`CREATE POLICY`/etc. are all skipped on that dialect).
+Any migration containing Postgres-specific behavior must therefore be run
+against a real Postgres instance at least once before shipping — this is
+not optional, since it's the only way to catch a bug like the one below.
+This was first done for `0021_add_row_level_security` (2026-09-20) and
+found two real bugs unit tests couldn't (a missing `information_schema`
+type cast, and `_set_rls_session_variables` originally using
+`SET LOCAL app.x = :value`, which is a hard Postgres syntax error since
+`SET`'s grammar has no placeholder for a bound parameter at all — fixed
+to use `set_config(name, :value, true)`). Repeat this whenever a new
+migration touches RLS, session variables, or other Postgres-only DDL/SQL:
+
+```powershell
+Set-Location "S:\AI-Projects\Civil Engineering\backend"
+uv run alembic upgrade head
+```
+
+Confirm the policy and enforcement flags landed:
+
+```powershell
+$env:PGPASSWORD = "civil_engineering"
+& "S:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -U civil_engineering -d civil_engineering `
+  -c "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('projects','clients');" `
+  -c "SELECT tablename, policyname FROM pg_policies WHERE tablename IN ('projects','clients');"
+```
+
+Prove actual isolation, not just that the policy exists (values below are
+disposable — clean them up afterward):
+
+```powershell
+& "S:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -U civil_engineering -d civil_engineering
+```
+```sql
+BEGIN;
+SET LOCAL app.current_tenant_id = '';
+SET LOCAL app.is_platform_admin = 'true';
+INSERT INTO tenants (id, name, created_at, updated_at) VALUES ('verify-a','Verify A', now(), now());
+INSERT INTO tenants (id, name, created_at, updated_at) VALUES ('verify-b','Verify B', now(), now());
+INSERT INTO clients (id, tenant_id, name, created_at, updated_at) VALUES ('verify-client-a','verify-a','Client A', now(), now());
+INSERT INTO clients (id, tenant_id, name, created_at, updated_at) VALUES ('verify-client-b','verify-b','Client B', now(), now());
+COMMIT;
+
+BEGIN; SET LOCAL app.current_tenant_id = 'verify-a'; SET LOCAL app.is_platform_admin = 'false';
+SELECT id FROM clients WHERE id LIKE 'verify-client-%'; -- expect ONLY verify-client-a
+COMMIT;
+
+-- Clean up:
+BEGIN; SET LOCAL app.current_tenant_id = ''; SET LOCAL app.is_platform_admin = 'true';
+DELETE FROM clients WHERE id LIKE 'verify-client-%'; DELETE FROM tenants WHERE id LIKE 'verify-%';
+COMMIT;
+```
+
+If the migration was applied to a shared/real dev database (not a scratch
+one), back it up first with `pg_dump -F c` and confirm `alembic downgrade`
+cleanly reverses it before trusting `upgrade head` on anything that matters.
+
 ## 4. Start The Backend
 
 Open a dedicated PowerShell terminal:
