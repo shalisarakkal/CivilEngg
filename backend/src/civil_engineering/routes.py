@@ -76,6 +76,8 @@ from civil_engineering.schemas import (
     ClientCreate,
     ClientResponse,
     ClientUpdate,
+    CollaboratorCandidate,
+    CollaboratorCandidatesResponse,
     ExtractedDocumentResponse,
     LoginRequest,
     PasswordChangeRequest,
@@ -473,6 +475,45 @@ def list_project_members(
 ) -> list[ProjectMembershipResponse]:
     statement = select(ProjectMembership).where(ProjectMembership.project_id == project.id)
     return [_membership_response(m) for m in database.scalars(statement)]
+
+
+@router.get(
+    "/projects/{project_id}/collaborator-candidates", response_model=CollaboratorCandidatesResponse
+)
+def list_collaborator_candidates(
+    project: Project = Depends(require_project_owner),
+    database: Session = Depends(get_db),
+) -> CollaboratorCandidatesResponse:
+    """Who the "Manage collaborators" UI can offer to add -- gated the same
+    way as everything else on that panel (require_project_owner: the
+    project's own owner, or an admin/platform_admin), not admin-only like
+    GET /users. A Power User project owner has no API access to GET /users
+    to browse candidates the way an admin can; this exists so both get a
+    real dropdown/checklist instead of the owner falling back to typing an
+    exact username."""
+    owner = database.get(User, project.owner_id) if project.owner_id else None
+    existing_member_ids = set(
+        database.scalars(
+            select(ProjectMembership.user_id).where(ProjectMembership.project_id == project.id)
+        )
+    )
+    candidates = database.scalars(
+        select(User).where(
+            User.tenant_id == project.tenant_id,
+            User.role.in_([ROLE_USER, ROLE_POWER_USER]),
+            User.disabled_at.is_(None),
+        )
+    )
+    return CollaboratorCandidatesResponse(
+        owner=CollaboratorCandidate(id=owner.id, username=owner.username, role=owner.role)
+        if owner is not None
+        else None,
+        candidates=[
+            CollaboratorCandidate(id=user.id, username=user.username, role=user.role)
+            for user in candidates
+            if user.id != project.owner_id and user.id not in existing_member_ids
+        ],
+    )
 
 
 @router.post(

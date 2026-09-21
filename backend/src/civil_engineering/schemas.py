@@ -333,5 +333,19 @@ class ProjectMembershipResponse(BaseModel):
     created_at: datetime
 
 
+class CollaboratorCandidate(BaseModel):
+    id: str
+    username: str
+    role: str
+
+
+class CollaboratorCandidatesResponse(BaseModel):
+    # None only if the project somehow has no owner_id at all (a legacy row
+    # predating Phase 15's ownership requirement -- see routes.py's own
+    # create_project/owner_id docstring notes).
+    owner: CollaboratorCandidate | None
+    candidates: list[CollaboratorCandidate]
+
+
 class ProjectOwnerUpdate(BaseModel):
     owner_id: str

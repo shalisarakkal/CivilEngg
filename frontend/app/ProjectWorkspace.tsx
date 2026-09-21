@@ -299,18 +299,15 @@ export default function ProjectWorkspace() {
   const [manageCollaboratorsProject, setManageCollaboratorsProject] = useState<Project | null>(null);
   const [existingCollaborators, setExistingCollaborators] = useState<ProjectMember[]>([]);
   const [ownerUsername, setOwnerUsername] = useState<string | null>(null);
-  const [newCollaboratorUsername, setNewCollaboratorUsername] = useState("");
   const [addingCollaborator, setAddingCollaborator] = useState(false);
   const [removingCollaboratorId, setRemovingCollaboratorId] = useState<string | null>(null);
-  // Multi-select add-candidate list, built from GET /users -- admin-only, so
-  // a Power User project owner (who can also open this modal, but has no
-  // API access to list every user) falls back to the single-username lookup
-  // flow instead when this fetch 403s.
+  // Multi-select add-candidate list, from GET /projects/{id}/collaborator-
+  // candidates -- gated the same way as the rest of this panel (the
+  // project's own owner, or an admin), so both always get a real checklist.
   const [collaboratorCandidates, setCollaboratorCandidates] = useState<
     { id: string; username: string; role: string }[]
   >([]);
   const [selectedCollaboratorIds, setSelectedCollaboratorIds] = useState<Set<string>>(new Set());
-  const [collaboratorListUnavailable, setCollaboratorListUnavailable] = useState(false);
   const [reassignCandidateId, setReassignCandidateId] = useState("");
   const [reassignTarget, setReassignTarget] = useState<{ id: string; username: string } | null>(null);
   const [reassigningOwner, setReassigningOwner] = useState(false);
@@ -534,47 +531,32 @@ export default function ProjectWorkspace() {
   // again after any add/remove/reassign, so "Manage collaborators" stays
   // open and up to date rather than closing after a single action.
   async function loadCollaboratorLists(project: Project) {
-    const [usersResponse, membersResponse] = await Promise.all([
-      apiFetch(`${apiUrl}/users`),
+    // GET /projects/{id}/collaborator-candidates is gated by
+    // require_project_owner -- the project's own owner, or an admin --
+    // exactly matching who can open this panel in the first place, unlike
+    // GET /users (admin-only). It also does the owner/existing-member/
+    // disabled/role filtering server-side, so the frontend has nothing left
+    // to compute.
+    const [candidatesResponse, membersResponse] = await Promise.all([
+      apiFetch(`${apiUrl}/projects/${project.id}/collaborator-candidates`),
       apiFetch(`${apiUrl}/projects/${project.id}/members`),
     ]);
-    const members: ProjectMember[] = membersResponse.ok ? await membersResponse.json() : [];
-    setExistingCollaborators(members);
-    if (!usersResponse.ok) {
-      // GET /users is admin-only -- a Power User project owner (who can
-      // also open this modal) gets a 403 here, so the add section falls
-      // back to a single-username lookup instead of an empty list. The
-      // owner is always either the caller themselves or, if not, the
-      // caller is an admin (the only other role that can open this modal),
-      // so this fallback never needs to display an unresolved owner name.
-      setCollaboratorListUnavailable(true);
+    setExistingCollaborators(membersResponse.ok ? await membersResponse.json() : []);
+    if (candidatesResponse.ok) {
+      const data: { owner: { id: string; username: string; role: string } | null; candidates: { id: string; username: string; role: string }[] } =
+        await candidatesResponse.json();
+      setOwnerUsername(data.owner?.username ?? null);
+      setCollaboratorCandidates(data.candidates);
+    } else {
       setOwnerUsername(currentUser.id === project.owner_id ? currentUser.username : null);
-      return;
+      setCollaboratorCandidates([]);
     }
-    setCollaboratorListUnavailable(false);
-    const allUsers: { id: string; username: string; role: string; disabled_at: string | null }[] =
-      await usersResponse.json();
-    setOwnerUsername(
-      currentUser.id === project.owner_id
-        ? currentUser.username
-        : (allUsers.find((user) => user.id === project.owner_id)?.username ?? null),
-    );
-    const memberIds = new Set(members.map((member) => member.user_id));
-    setCollaboratorCandidates(
-      allUsers
-        .filter((user) => user.role === "user" || user.role === "power_user")
-        .filter((user) => user.disabled_at === null)
-        .filter((user) => user.id !== project.owner_id && !memberIds.has(user.id))
-        .map((user) => ({ id: user.id, username: user.username, role: user.role })),
-    );
   }
 
   async function openManageCollaborators(project: Project) {
     setManageCollaboratorsProject(project);
-    setNewCollaboratorUsername("");
     setSelectedCollaboratorIds(new Set());
     setCollaboratorCandidates([]);
-    setCollaboratorListUnavailable(false);
     setExistingCollaborators([]);
     setOwnerUsername(null);
     setReassignCandidateId("");
@@ -621,39 +603,6 @@ export default function ProjectWorkspace() {
       setMessage(summarizeCollaboratorResults(results), results.length > 1 ? results : null, "Added");
       setSelectedCollaboratorIds(new Set());
       await loadCollaboratorLists(project);
-    } finally {
-      setAddingCollaborator(false);
-    }
-  }
-
-  async function confirmAddCollaborator(event: FormEvent) {
-    event.preventDefault();
-    if (!manageCollaboratorsProject || !newCollaboratorUsername.trim()) return;
-    const project = manageCollaboratorsProject;
-    setAddingCollaborator(true);
-    try {
-      const lookup = await apiFetch(
-        `${apiUrl}/users/lookup?${new URLSearchParams({ username: newCollaboratorUsername.trim() })}`,
-      );
-      if (!lookup.ok) {
-        const body = await lookup.json().catch(() => null);
-        setMessage(lookup.status === 404 ? `No user named "${newCollaboratorUsername.trim()}".` : errorMessage(body, "Could not look up that user."));
-        return;
-      }
-      const found: { id: string; username: string } = await lookup.json();
-      const response = await apiFetch(`${apiUrl}/projects/${project.id}/members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: found.id }),
-      });
-      if (response.ok) {
-        setMessage(`${found.username} was added to ${project.name}.`);
-        setNewCollaboratorUsername("");
-        await loadCollaboratorLists(project);
-      } else {
-        const body = await response.json().catch(() => null);
-        setMessage(errorMessage(body, "Could not add that collaborator."));
-      }
     } finally {
       setAddingCollaborator(false);
     }
@@ -1741,30 +1690,7 @@ export default function ProjectWorkspace() {
                 )}
 
                 <p className="eyebrow">Add collaborators</p>
-                {collaboratorListUnavailable ? (
-                  // GET /users is admin-only -- a Power User project owner
-                  // has no API access to list every user, so falls back to
-                  // a one-at-a-time lookup instead of an empty list.
-                  <form onSubmit={confirmAddCollaborator}>
-                    <label htmlFor="new-collaborator-username">Username</label>
-                    <div className="input-row">
-                      <input
-                        id="new-collaborator-username"
-                        value={newCollaboratorUsername}
-                        onChange={(event) => setNewCollaboratorUsername(event.target.value)}
-                        required
-                        autoFocus
-                      />
-                      <button
-                        type="submit"
-                        className="secondary-button"
-                        disabled={addingCollaborator || !newCollaboratorUsername.trim()}
-                      >
-                        {addingCollaborator ? "Adding..." : "Add"}
-                      </button>
-                    </div>
-                  </form>
-                ) : collaboratorCandidates.length === 0 ? (
+                {collaboratorCandidates.length === 0 ? (
                   <p className="muted">
                     No eligible users to add — everyone active is already a collaborator, is the
                     owner, or has no User/Power User account.

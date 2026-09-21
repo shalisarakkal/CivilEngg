@@ -991,17 +991,18 @@ test.describe("project workspace", () => {
     await expect.poll(() => uploadedNames).toEqual(["a.csv", "b.csv"]);
   });
 
-  test("Manage collaborators falls back to a single-username lookup when the caller can't list every user (Power User owner)", async ({
+  test("Manage collaborators gives a Power User owner a real checklist, not just a username lookup", async ({
     page,
   }) => {
-    // GET /users is admin-only; a Power User project owner (who can also
-    // open this modal) gets a 403 there and has no way to browse/multi-select
-    // candidates, so falls back to the original one-at-a-time flow instead
-    // of an empty, broken list.
+    // GET /users is admin-only, but GET /projects/{id}/collaborator-candidates
+    // is gated the same way as this whole panel (owner or admin), so a Power
+    // User project owner gets a proper checklist here too, not a fallback.
     await mockBaseline(page, [PROJECT]);
-    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
-    await page.route(`${API}/users/lookup*`, (route) =>
-      json(route, { id: "found-user-id", username: "jsmith" }),
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) =>
+      json(route, {
+        owner: { id: PROJECT.owner_id, username: MOCK_CURRENT_USER.username, role: "power_user" },
+        candidates: [{ id: "u-1", username: "jsmith", role: "user" }],
+      }),
     );
     let postBody: unknown = null;
     await page.route(`${API}/projects/${PROJECT.id}/members`, async (route) => {
@@ -1016,22 +1017,23 @@ test.describe("project workspace", () => {
     await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
     await page.getByRole("button", { name: "Manage collaborators" }).click();
 
-    // GET /users failing means the owner's own name is resolved locally
-    // (the caller IS the owner here), not looked up.
     await expect(page.locator(".collaborator-owner-row")).toContainText(MOCK_CURRENT_USER.username);
-    await expect(page.locator(".collaborator-candidate-list")).toHaveCount(0);
-    const usernameInput = page.locator("#new-collaborator-username");
-    await expect(usernameInput).toBeVisible();
-    await usernameInput.fill("jsmith");
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    const list = page.locator(".collaborator-candidate-list:not(.existing-collaborator-list)");
+    await list.getByText("jsmith").click();
+    await page.getByRole("button", { name: /^Add 1 collaborator$/ }).click();
 
-    await expect(page.getByText("jsmith was added to Oak Street Site.")).toBeVisible();
-    expect(postBody).toEqual({ user_id: "found-user-id" });
+    await expect(page.getByText("jsmith added.")).toBeVisible();
+    expect(postBody).toEqual({ user_id: "u-1" });
   });
 
   test("Manage collaborators lets the owner remove an existing collaborator", async ({ page }) => {
     await mockBaseline(page, [PROJECT]);
-    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) =>
+      json(route, {
+        owner: { id: PROJECT.owner_id, username: MOCK_CURRENT_USER.username, role: "power_user" },
+        candidates: [],
+      }),
+    );
     let deleteCalled = false;
     await page.route(`${API}/projects/${PROJECT.id}/members`, (route) =>
       json(route, [
@@ -1064,7 +1066,12 @@ test.describe("project workspace", () => {
     page,
   }) => {
     await mockBaseline(page, [PROJECT]);
-    await page.route(`${API}/users`, (route) => json(route, { detail: "Admin role required" }, 403));
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) =>
+      json(route, {
+        owner: { id: PROJECT.owner_id, username: MOCK_CURRENT_USER.username, role: "power_user" },
+        candidates: [],
+      }),
+    );
     await page.route(`${API}/projects/${PROJECT.id}/members`, (route) =>
       json(route, [
         {
@@ -1216,17 +1223,18 @@ test.describe("project workspace as admin", () => {
     await mockBaseline(page, [PROJECT]);
     await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
     await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
-    await page.route(`${API}/users`, (route) =>
-      json(route, [
-        // Already the owner -- must not appear as a candidate.
-        { id: PROJECT.owner_id, username: "owner_user", role: "power_user", disabled_at: null },
-        // Already a member -- must not appear as a candidate either.
-        { id: "existing-member", username: "existing_member", role: "user", disabled_at: null },
-        { id: "u-1", username: "jsmith", role: "user", disabled_at: null },
-        { id: "pu-1", username: "pu_jane", role: "power_user", disabled_at: null },
-        { id: "disabled-1", username: "disabled_user", role: "user", disabled_at: "2026-01-01T00:00:00Z" },
-        { id: "admin-1", username: "another_admin", role: "admin", disabled_at: null },
-      ]),
+    // Filtering (owner/existing-member/disabled/role exclusion) happens
+    // server-side now -- see backend/tests/test_collaborator_candidates.py
+    // for that logic's own coverage. This mock returns what the endpoint
+    // would actually send back, already filtered.
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) =>
+      json(route, {
+        owner: { id: PROJECT.owner_id, username: "owner_user", role: "power_user" },
+        candidates: [
+          { id: "u-1", username: "jsmith", role: "user" },
+          { id: "pu-1", username: "pu_jane", role: "power_user" },
+        ],
+      }),
     );
     const postedUserIds: string[] = [];
     await page.route(`${API}/projects/${PROJECT.id}/members`, async (route) => {
@@ -1251,21 +1259,14 @@ test.describe("project workspace as admin", () => {
     await expect(page.getByRole("heading", { name: PROJECT.name })).toBeVisible();
     await page.getByRole("button", { name: "Manage collaborators" }).click();
 
-    // The owner's name is resolved from GET /users since the admin caller
-    // isn't the owner themselves.
+    // The owner's name comes from the candidates endpoint's own response
+    // since the admin caller isn't the owner themselves.
     await expect(page.locator(".collaborator-owner-row")).toContainText("owner_user");
     await expect(page.getByText("Collaborators (1)")).toBeVisible();
     await expect(page.locator(".existing-collaborator-list")).toContainText("existing_member");
 
     const list = page.locator(".collaborator-candidate-list:not(.existing-collaborator-list)");
-    // Only jsmith and pu_jane are eligible: owner_user is the owner,
-    // existing_member is already a collaborator, disabled_user is disabled,
-    // and another_admin isn't a User/Power User.
     await expect(list.locator("li")).toHaveCount(2);
-    await expect(list.getByText("owner_user")).toHaveCount(0);
-    await expect(list.getByText("existing_member")).toHaveCount(0);
-    await expect(list.getByText("disabled_user")).toHaveCount(0);
-    await expect(list.getByText("another_admin")).toHaveCount(0);
 
     await list.getByText("jsmith").click();
     await list.getByText("pu_jane").click();
