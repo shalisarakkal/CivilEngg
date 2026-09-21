@@ -630,8 +630,19 @@ export default function ProjectWorkspace() {
 
   function pickReassignCandidate(userId: string) {
     setReassignCandidateId(userId);
-    const candidate = existingCollaborators.find((member) => member.user_id === userId);
-    setReassignTarget(candidate ? { id: candidate.user_id, username: candidate.username } : null);
+    // routes.py's reassign_project_owner only requires the new owner to be
+    // an enabled power_user in the project's own tenant -- it never
+    // required them to already be a collaborator (it even cleans up a
+    // stale membership row if they happen to already have one). The
+    // eligible pool is therefore existing power_user collaborators plus
+    // power_user add-candidates, not just the former.
+    const fromExisting = existingCollaborators.find((member) => member.user_id === userId);
+    if (fromExisting) {
+      setReassignTarget({ id: fromExisting.user_id, username: fromExisting.username });
+      return;
+    }
+    const fromCandidates = collaboratorCandidates.find((candidate) => candidate.id === userId);
+    setReassignTarget(fromCandidates ? { id: fromCandidates.id, username: fromCandidates.username } : null);
   }
 
   function cancelReassign() {
@@ -1478,6 +1489,17 @@ export default function ProjectWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Who's eligible to become the new owner: routes.py's reassign_project_owner
+  // only requires an enabled power_user in the project's own tenant, never
+  // that they already be a collaborator -- so this is existing power_user
+  // collaborators *plus* power_user add-candidates, not just the former.
+  const reassignEligible = [
+    ...existingCollaborators
+      .filter((member) => member.role === "power_user")
+      .map((member) => ({ id: member.user_id, username: member.username })),
+    ...collaboratorCandidates.filter((candidate) => candidate.role === "power_user"),
+  ];
+
   return (
     <main className="workspace">
       <header className="topbar">
@@ -1645,7 +1667,7 @@ export default function ProjectWorkspace() {
                 <div className="collaborator-owner-row">
                   <strong>Owner</strong>
                   <span>{ownerUsername ?? "Unknown"}</span>
-                  {existingCollaborators.some((member) => member.role === "power_user") ? (
+                  {reassignEligible.length > 0 ? (
                     <select
                       aria-label="Reassign owner to"
                       value={reassignCandidateId}
@@ -1654,16 +1676,14 @@ export default function ProjectWorkspace() {
                       <option value="" disabled>
                         Reassign to...
                       </option>
-                      {existingCollaborators
-                        .filter((member) => member.role === "power_user")
-                        .map((member) => (
-                          <option key={member.user_id} value={member.user_id}>
-                            {member.username}
-                          </option>
-                        ))}
+                      {reassignEligible.map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {candidate.username}
+                        </option>
+                      ))}
                     </select>
                   ) : (
-                    <small className="muted">No Power User collaborators to reassign to</small>
+                    <small className="muted">No Power Users available to reassign to</small>
                   )}
                 </div>
 

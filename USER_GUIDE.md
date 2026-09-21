@@ -155,8 +155,10 @@ site model, not against a file that has only been processed.
   at once: both an Admin and the project's own owner see a checklist of
   every eligible User/Power User (already-added collaborators, the
   owner, and disabled accounts are excluded automatically) and can
-  select as many as needed before submitting. Reassigning the owner (to
-  an existing Power User collaborator) always requires an explicit
+  select as many as needed before submitting. Reassigning the owner
+  offers any eligible Power User in the organization — they don't need
+  to already be a collaborator on the project first, since ownership
+  itself grants full access — and always requires an explicit
   confirmation step before it takes effect.
 
 ## Known limitations

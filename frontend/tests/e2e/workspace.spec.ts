@@ -1104,6 +1104,42 @@ test.describe("project workspace", () => {
     await expect(page.getByText("Oak Street Site's owner was changed to pu_jane.")).toBeVisible();
     expect(patchBody).toEqual({ owner_id: "collab-1" });
   });
+
+  test("Manage collaborators can reassign to a Power User who isn't a collaborator yet", async ({
+    page,
+  }) => {
+    // routes.py's reassign_project_owner only requires an enabled power_user
+    // in the project's own tenant -- never that they already be a
+    // collaborator -- so the dropdown must offer power_user add-candidates
+    // too, not just existing collaborators.
+    await mockBaseline(page, [PROJECT]);
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) =>
+      json(route, {
+        owner: { id: PROJECT.owner_id, username: MOCK_CURRENT_USER.username, role: "power_user" },
+        candidates: [{ id: "pu-2", username: "pu_not_a_member_yet", role: "power_user" }],
+      }),
+    );
+    await page.route(`${API}/projects/${PROJECT.id}/members`, (route) => json(route, []));
+    let patchBody: unknown = null;
+    await page.route(`${API}/projects/${PROJECT.id}/owner`, async (route) => {
+      patchBody = route.request().postDataJSON();
+      return json(route, { ...PROJECT, owner_id: "pu-2" });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
+    await page.getByLabel("Reassign owner to").selectOption("pu-2");
+
+    await expect(
+      page.getByText("Make pu_not_a_member_yet the new owner of Oak Street Site?"),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Confirm reassign" }).click();
+
+    await expect(
+      page.getByText("Oak Street Site's owner was changed to pu_not_a_member_yet."),
+    ).toBeVisible();
+    expect(patchBody).toEqual({ owner_id: "pu-2" });
+  });
 });
 
 test.describe("project workspace as admin", () => {
