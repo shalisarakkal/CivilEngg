@@ -72,12 +72,14 @@ def test_activity_event_round_trips_with_details_and_recorded_user(
     assert body["success_label"] == "Accepted"
     assert len(body["details"]) == 3
     assert body["user_id"] == "test-user"  # override_user_factory's fixed identity
+    assert body["username"] == "test-user"  # override_user_factory names the user after its id
 
     listed = client.get(f"/projects/{project['id']}/activity-events")
     assert listed.status_code == 200
     events = listed.json()
     assert len(events) == 1
     assert events[0]["id"] == body["id"]
+    assert events[0]["username"] == "test-user"
 
 
 def test_activity_events_default_to_no_details_and_a_successful_label(
@@ -153,3 +155,32 @@ def test_a_nonmember_gets_404_not_the_events_of_a_project_they_cannot_see(
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_username_is_null_once_the_recording_user_is_gone(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # username is denormalized from the related User at read time (routes.py's
+    # _activity_event_response), not stored on the event itself -- once
+    # user_id is gone (SET NULL on the user's own deletion), there's no
+    # longer any account to look the name up from.
+    from civil_engineering.models import ActivityEvent
+
+    client, sessions = _make_client(tmp_path, monkeypatch)
+    project = client.post("/projects", json={"name": "Oak Street Site"}).json()
+    created = client.post(
+        f"/projects/{project['id']}/activity-events", json={"text": "Site summary generated."}
+    ).json()
+
+    database = sessions()
+    try:
+        event = database.get(ActivityEvent, created["id"])
+        assert event is not None
+        event.user_id = None
+        database.commit()
+    finally:
+        database.close()
+
+    events = client.get(f"/projects/{project['id']}/activity-events").json()
+    assert events[0]["user_id"] is None
+    assert events[0]["username"] is None

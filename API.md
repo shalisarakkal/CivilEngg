@@ -67,7 +67,7 @@ docstrings.
 
 ## Projects
 
-- `POST /projects` - create a project (admin/power_user; a power_user caller auto-becomes owner)
+- `POST /projects` - create a project (admin/power_user). A power_user caller auto-becomes owner. An admin (or platform_admin) caller has no project of their own to become owner of, so must explicitly name an existing power_user as `owner_id` (422 `"owner_id is required and must belong to a power_user"` otherwise) — the workspace's own create-project form surfaces this as an owner-selection dropdown for an admin caller, rather than requiring a raw API call.
 - `GET /projects` - list projects (admin sees all within its own tenant; platform_admin sees all across every tenant; everyone else sees only projects they own or are a member of)
 - `GET /projects/{project_id}` - retrieve a project
 - `PATCH /projects/{project_id}` - update a project
@@ -78,7 +78,7 @@ docstrings.
 - `GET /projects/{project_id}/members` - list a project's collaborators
 - `POST /projects/{project_id}/members` / `DELETE /projects/{project_id}/members/{user_id}` - add/remove a collaborator (owner/admin only; the collaborator must belong to the project's own tenant)
 - `PATCH /projects/{project_id}/owner` - reassign the project's owner (owner/admin only; the new owner must be a power_user in the project's own tenant)
-- `POST /projects/{project_id}/activity-events` / `GET /projects/{project_id}/activity-events` - Phase 12's persisted audit trail: record/list notable actions taken within the project (any project member, matching every other project-scoped resource's access boundary). `GET` supports `?limit=` (default 50, clamped to a max of 200), newest first. Complements the frontend's own session-only activity log (kept for instant, no-round-trip feedback) with a durable copy that survives a reload and is visible to any other project member.
+- `POST /projects/{project_id}/activity-events` / `GET /projects/{project_id}/activity-events` - Phase 12's persisted audit trail: record/list notable actions taken within the project (any project member, matching every other project-scoped resource's access boundary). `GET` supports `?limit=` (default 50, clamped to a max of 200), newest first. Complements the frontend's own session-only activity log (kept for instant, no-round-trip feedback) with a durable copy that survives a reload and is visible to any other project member. Each event carries `username` (denormalized from the recording user, null once that account is deleted) alongside `user_id`, so the log shows who took the action, not just what and when.
 
 A project's optional `coordinate_reference_system` must be a projected CRS. `POST`/`PATCH` return `422` for a geographic (lat/lon degree) one, such as `EPSG:4326`, because every measurement the app performs is planar. A CRS that pyproj does not recognize, or none at all, is accepted and the project's coordinates are assumed to be planar already.
 

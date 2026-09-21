@@ -2010,6 +2010,22 @@ def ask_question(
     return question
 
 
+def _activity_event_response(event: ActivityEvent) -> ActivityEventResponse:
+    # username lives on the related User, not the event row itself, so
+    # from_attributes=True alone can't fill it -- build explicitly, same as
+    # _membership_response does for ProjectMembershipResponse.
+    return ActivityEventResponse(
+        id=event.id,
+        project_id=event.project_id,
+        user_id=event.user_id,
+        username=event.user.username if event.user else None,
+        text=event.text,
+        details=event.details,
+        success_label=event.success_label,
+        created_at=event.created_at,
+    )
+
+
 @router.post(
     "/projects/{project_id}/activity-events",
     response_model=ActivityEventResponse,
@@ -2021,7 +2037,7 @@ def create_activity_event(
     database: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     _project: Project = Depends(require_project_member),
-) -> ActivityEvent:
+) -> ActivityEventResponse:
     """Phase 12's persisted audit trail: records one notable action taken
     within this project, mirroring what the frontend's own session-only
     activity log already shows, so the history survives a reload and is
@@ -2038,7 +2054,7 @@ def create_activity_event(
     database.add(event)
     database.commit()
     database.refresh(event)
-    return event
+    return _activity_event_response(event)
 
 
 @router.get("/projects/{project_id}/activity-events", response_model=list[ActivityEventResponse])
@@ -2047,13 +2063,12 @@ def list_activity_events(
     limit: int = 50,
     database: Session = Depends(get_db),
     _project: Project = Depends(require_project_member),
-) -> list[ActivityEvent]:
+) -> list[ActivityEventResponse]:
     capped_limit = max(1, min(limit, 200))
-    return list(
-        database.scalars(
-            select(ActivityEvent)
-            .where(ActivityEvent.project_id == project_id)
-            .order_by(ActivityEvent.created_at.desc())
-            .limit(capped_limit)
-        )
+    events = database.scalars(
+        select(ActivityEvent)
+        .where(ActivityEvent.project_id == project_id)
+        .order_by(ActivityEvent.created_at.desc())
+        .limit(capped_limit)
     )
+    return [_activity_event_response(event) for event in events]

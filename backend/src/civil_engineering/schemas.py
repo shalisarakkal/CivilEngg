@@ -235,6 +235,12 @@ class ActivityEventResponse(BaseModel):
     id: str
     project_id: str
     user_id: str | None
+    # Denormalized from the related User (built explicitly in routes.py,
+    # matching ProjectMembershipResponse's own precedent). Null once the
+    # user is deleted -- user_id itself is SET NULL then too (models.py),
+    # so which account it was is genuinely no longer known, same as for
+    # any other user_id-referencing row in this codebase.
+    username: str | None
     text: str
     details: list[dict[str, object]] | None
     success_label: str

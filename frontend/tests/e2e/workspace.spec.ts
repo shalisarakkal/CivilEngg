@@ -607,6 +607,8 @@ test.describe("project workspace", () => {
     const log = page.locator(".activity-log");
     await expect(log).toContainText("slope calculation completed.");
     await expect(log).toContainText("Site summary generated.");
+    // Each entry names who performed it, not just what and when.
+    await expect(log.locator(".activity-log-user").first()).toHaveText(MOCK_CURRENT_USER.username);
   });
 
   test("site intelligence: generating multiple summaries keeps a history instead of replacing", async ({ page }) => {
@@ -987,5 +989,117 @@ test.describe("project workspace", () => {
     await expect(page.locator(".file-picker span")).toHaveText("1 file selected");
     await page.getByRole("button", { name: "Upload file" }).click();
     await expect.poll(() => uploadedNames).toEqual(["a.csv", "b.csv"]);
+  });
+});
+
+test.describe("project workspace as admin", () => {
+  const MOCK_ADMIN = {
+    id: "77777777-7777-7777-7777-777777777777",
+    username: "mock-admin",
+    role: "admin",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    disabled_at: null,
+  };
+
+  test("creating a project requires choosing an owner, since an admin has no project of their own to become owner of", async ({
+    page,
+  }) => {
+    // Reproduces a real reported bug: an admin's "Project could not be
+    // created." gave no indication that routes.py's create_project (ADR-009:
+    // "a project's owner must be a power_user") requires an explicit
+    // owner_id for an admin caller, since -- unlike a power_user -- an
+    // admin never auto-becomes the owner of a project they create.
+    await mockBaseline(page, []);
+    await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
+    await page.route(`${API}/users`, (route) =>
+      json(route, [
+        { id: "pu-1", username: "pu_jane", role: "power_user", disabled_at: null },
+        { id: "pu-2", username: "pu_disabled", role: "power_user", disabled_at: "2026-01-01T00:00:00Z" },
+        { id: "u-1", username: "plain_user", role: "user", disabled_at: null },
+      ]),
+    );
+    let postBody: unknown = null;
+    await page.route(`${API}/projects`, async (route) => {
+      if (route.request().method() === "POST") {
+        postBody = route.request().postDataJSON();
+        return json(
+          route,
+          {
+            id: "new-project-id",
+            client_id: null,
+            owner_id: "pu-1",
+            name: "Oak Street Site",
+            description: null,
+            default_unit_system: "imperial",
+            coordinate_reference_system: null,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+            archived_at: null,
+          },
+          201,
+        );
+      }
+      return json(route, []);
+    });
+    await page.route(`${API}/projects/new-project-id/files`, (route) => json(route, []));
+    await page.route(`${API}/projects/new-project-id/site-model/revisions`, (route) => json(route, []));
+    await page.route(`${API}/projects/new-project-id/calculations`, (route) => json(route, []));
+    await page.route(`${API}/projects/new-project-id/processing`, (route) => json(route, []));
+    await page.route(`${API}/projects/new-project-id/summaries`, (route) => json(route, []));
+    await page.route(`${API}/projects/new-project-id/activity-events`, (route) => json(route, []));
+
+    await page.goto("/");
+
+    // Only the enabled Power User is offered -- not the disabled one, and
+    // not the plain "user" account, either of which would fail routes.py's
+    // own "A project owner must be a power_user" check.
+    const ownerSelect = page.getByLabel("Project owner");
+    await expect(ownerSelect.locator("option")).toHaveCount(2); // placeholder + pu_jane
+    await expect(ownerSelect.getByText("pu_disabled")).toHaveCount(0);
+    await expect(ownerSelect.getByText("plain_user")).toHaveCount(0);
+
+    await page.locator("#project-name").fill("Oak Street Site");
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await expect(page.getByText("Choose an owner (a Power User) for the new project.")).toBeVisible();
+    expect(postBody).toBeNull();
+
+    await ownerSelect.selectOption("pu-1");
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await expect(page.getByText("Project created. Add a source file to begin.")).toBeVisible();
+    expect(postBody).toEqual({ name: "Oak Street Site", owner_id: "pu-1" });
+  });
+
+  test("a real (non-owner-id) error from the server is shown instead of a generic message", async ({
+    page,
+  }) => {
+    // The pre-fix bug: any non-2xx response was reported as the same
+    // generic "Project could not be created.", discarding whatever detail
+    // the server actually sent -- leaving the user with no way to tell a
+    // missing-owner error from a name conflict from anything else.
+    await mockBaseline(page, []);
+    await page.route(`${API}/auth/me`, (route) => json(route, MOCK_ADMIN));
+    await page.route(`${API}/admin/projects/archived`, (route) => json(route, []));
+    await page.route(`${API}/users`, (route) =>
+      json(route, [{ id: "pu-1", username: "pu_jane", role: "power_user", disabled_at: null }]),
+    );
+    await page.route(`${API}/projects`, async (route) => {
+      if (route.request().method() === "POST") {
+        return json(route, { detail: "A project owner must belong to the project's own tenant" }, 422);
+      }
+      return json(route, []);
+    });
+
+    await page.goto("/");
+    await page.locator("#project-name").fill("Oak Street Site");
+    await page.getByLabel("Project owner").selectOption("pu-1");
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await expect(
+      page.getByText("A project owner must belong to the project's own tenant"),
+    ).toBeVisible();
   });
 });

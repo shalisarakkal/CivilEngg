@@ -95,11 +95,12 @@ type BatchResult = { name: string; ok: boolean; detail: string; retryable?: bool
 // per-tab convenience. Before a project exists (e.g. "Ready for your first
 // project.", a failed project-list load), there's nothing to attach it to,
 // so it stays local-only, same as before persistence existed.
-type ActivityEvent = { id: string; timestamp: number; text: string; details: BatchResult[] | null; successLabel: string };
+type ActivityEvent = { id: string; timestamp: number; text: string; details: BatchResult[] | null; successLabel: string; username: string | null };
 
 // The shape ActivityEventResponse (schemas.py) actually returns.
 type PersistedActivityEvent = {
   id: string;
+  username: string | null;
   text: string;
   details: BatchResult[] | null;
   success_label: string;
@@ -113,6 +114,7 @@ function activityEventFromPersisted(event: PersistedActivityEvent): ActivityEven
     text: event.text,
     details: event.details,
     successLabel: event.success_label,
+    username: event.username,
   };
 }
 
@@ -131,10 +133,11 @@ function makeActivityEvent(
   text: string,
   details: BatchResult[] | null,
   successLabel: string,
-  sequence: number
+  sequence: number,
+  username: string | null
 ): ActivityEvent {
   const timestamp = Date.now();
-  return { id: `${timestamp}-${sequence}`, timestamp, text, details, successLabel };
+  return { id: `${timestamp}-${sequence}`, timestamp, text, details, successLabel, username };
 }
 
 // Browsers deliberately never expose a selected/dropped file's filesystem
@@ -270,6 +273,14 @@ export default function ProjectWorkspace() {
   const [ownerReassignProject, setOwnerReassignProject] = useState<Project | null>(null);
   const [ownerReassignCandidates, setOwnerReassignCandidates] = useState<ProjectMember[]>([]);
   const [newOwnerId, setNewOwnerId] = useState("");
+  // An admin has no project of their own to auto-become owner of (only a
+  // power_user does -- routes.py's create_project), so creating a project
+  // as admin requires explicitly naming an existing power_user as owner_id.
+  // Fetched once for the admin role only (loadInitialData below).
+  const [availablePowerUsers, setAvailablePowerUsers] = useState<{ id: string; username: string }[]>(
+    [],
+  );
+  const [newProjectOwnerId, setNewProjectOwnerId] = useState("");
   const [reassigningOwner, setReassigningOwner] = useState(false);
   const [addCollaboratorProject, setAddCollaboratorProject] = useState<Project | null>(null);
   const [newCollaboratorUsername, setNewCollaboratorUsername] = useState("");
@@ -314,7 +325,13 @@ export default function ProjectWorkspace() {
     setMessageSuccessLabel(successLabel);
     setShowMessageDetails(false);
     eventIdCounter.current += 1;
-    const event = makeActivityEvent(text, details, successLabel, eventIdCounter.current);
+    const event = makeActivityEvent(
+      text,
+      details,
+      successLabel,
+      eventIdCounter.current,
+      currentUser.username
+    );
     setEvents((current) => [event, ...current].slice(0, ACTIVITY_LOG_LIMIT));
     if (selectedProject) {
       // Fire-and-forget, plain fetch (not apiFetch): apiFetch redirects the
@@ -694,20 +711,34 @@ export default function ProjectWorkspace() {
       setMessage("Enter a project name first.");
       return;
     }
+    // An admin has no project of their own to auto-become owner of --
+    // routes.py's create_project requires an explicit owner_id naming an
+    // existing power_user for an admin (or platform_admin) caller.
+    if (currentUser.role === "admin" && !newProjectOwnerId) {
+      setMessage("Choose an owner (a Power User) for the new project.");
+      return;
+    }
     setLoading(true);
     try {
       const response = await apiFetch(`${apiUrl}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: projectName.trim() }),
+        body: JSON.stringify({
+          name: projectName.trim(),
+          ...(currentUser.role === "admin" ? { owner_id: newProjectOwnerId } : {}),
+        }),
       });
       if (response.ok) {
         const project: Project = await response.json();
         setProjects((current) => [...current, project]);
         setProjectName("");
+        setNewProjectOwnerId("");
         await selectProject(project);
         setMessage("Project created. Add a source file to begin.");
-      } else setMessage("Project could not be created.");
+      } else {
+        const body = await response.json().catch(() => null);
+        setMessage(errorMessage(body, "Project could not be created."));
+      }
     } catch (error) {
       setMessage(error instanceof Error ? `Project request failed: ${error.message}` : "Project request failed.");
     } finally {
@@ -1329,6 +1360,18 @@ export default function ProjectWorkspace() {
       if (archiveResponse.ok) setArchivedFiles(await archiveResponse.json());
       const archivedProjectsResponse = await apiFetch(`${apiUrl}/admin/projects/archived`);
       if (archivedProjectsResponse.ok) setArchivedProjects(await archivedProjectsResponse.json());
+      if (currentUser.role === "admin") {
+        const usersResponse = await apiFetch(`${apiUrl}/users`);
+        if (usersResponse.ok) {
+          const allUsers: { id: string; username: string; role: string; disabled_at: string | null }[] =
+            await usersResponse.json();
+          setAvailablePowerUsers(
+            allUsers
+              .filter((user) => user.role === "power_user" && user.disabled_at === null)
+              .map((user) => ({ id: user.id, username: user.username })),
+          );
+        }
+      }
     }
 
     void loadInitialData();
@@ -1380,6 +1423,7 @@ export default function ProjectWorkspace() {
               {events.map((event) => (
                 <li key={event.id} className="activity-log-item">
                   <span className="activity-log-time">{formatEventTime(event.timestamp)}</span>
+                  <span className="activity-log-user">{event.username ?? "Unknown user"}</span>
                   <span className="activity-log-text">{event.text}</span>
                   {event.details && event.details.length > 1 && (
                     <div className="activity-log-item-details">
@@ -1403,6 +1447,25 @@ export default function ProjectWorkspace() {
           <form className="create-form" onSubmit={createProject}>
             <label htmlFor="project-name">New project</label>
             <div className="input-row"><input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Oak Street Site" maxLength={200} /><button type="submit" disabled={loading} aria-label="Create project">+</button></div>
+            {currentUser.role === "admin" && (
+              <div className="input-row">
+                <select
+                  id="new-project-owner"
+                  aria-label="Project owner"
+                  value={newProjectOwnerId}
+                  onChange={(event) => setNewProjectOwnerId(event.target.value)}
+                >
+                  <option value="" disabled>
+                    {availablePowerUsers.length === 0 ? "No Power Users available" : "Choose an owner (Power User)"}
+                  </option>
+                  {availablePowerUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </form>
           <div className="project-list">
             {projects.length === 0 && <p className="muted">No projects yet.</p>}
