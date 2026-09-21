@@ -22,6 +22,7 @@ function UsersAdminPage() {
   const [newUsername, setNewUsername] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("user");
   const [userPendingDelete, setUserPendingDelete] = useState<ManagedUser | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -50,6 +51,10 @@ function UsersAdminPage() {
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
+    if (newPassword !== confirmNewPassword) {
+      setMessage("New password and confirm password do not match.");
+      return;
+    }
     const response = await apiFetch(`${apiUrl}/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,6 +69,7 @@ function UsersAdminPage() {
       setNewUsername("");
       setNewEmail("");
       setNewPassword("");
+      setConfirmNewPassword("");
       setNewRole("user");
       await loadUsers();
     } else {
@@ -196,6 +202,16 @@ function UsersAdminPage() {
             placeholder="Password (min. 8 characters)"
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={8}
+            required
+          />
+          <input
+            type="password"
+            placeholder="Confirm password"
+            value={confirmNewPassword}
+            onChange={(event) => setConfirmNewPassword(event.target.value)}
+            autoComplete="new-password"
             minLength={8}
             required
           />

@@ -10,6 +10,7 @@ function AccountPage() {
   const { currentUser } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -18,6 +19,10 @@ function AccountPage() {
     event.preventDefault();
     setMessage(null);
     setSuccess(false);
+    if (newPassword !== confirmPassword) {
+      setMessage("New password and confirm password do not match.");
+      return;
+    }
     setSaving(true);
     try {
       const response = await apiFetch(`${apiUrl}/auth/password`, {
@@ -28,6 +33,7 @@ function AccountPage() {
       if (response.ok) {
         setCurrentPassword("");
         setNewPassword("");
+        setConfirmPassword("");
         setSuccess(true);
       } else {
         const body = await response.json().catch(() => null);
@@ -82,6 +88,19 @@ function AccountPage() {
             placeholder="New password (min. 8 characters)"
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={8}
+            required
+          />
+        </div>
+        <label htmlFor="confirm-password">Confirm password</label>
+        <div className="input-row">
+          <input
+            id="confirm-password"
+            type="password"
+            placeholder="Re-enter new password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
             autoComplete="new-password"
             minLength={8}
             required
