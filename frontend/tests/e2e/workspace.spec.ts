@@ -1140,6 +1140,40 @@ test.describe("project workspace", () => {
     ).toBeVisible();
     expect(patchBody).toEqual({ owner_id: "pu-2" });
   });
+
+  test("Manage collaborators closes cleanly (never shows 'Owner: Unknown') when a Power User gives their own project away", async ({
+    page,
+  }) => {
+    // require_project_owner rejects the caller on their very next call once
+    // they're no longer the owner and aren't an admin -- the real backend
+    // 403s here, which this test reproduces instead of the earlier mocks'
+    // fixed 200 response that masked this bug.
+    await mockBaseline(page, [PROJECT]);
+    let candidatesCalls = 0;
+    await page.route(`${API}/projects/${PROJECT.id}/collaborator-candidates`, (route) => {
+      candidatesCalls += 1;
+      if (candidatesCalls > 1) return route.fulfill({ status: 403, body: "{}" });
+      return json(route, {
+        owner: { id: PROJECT.owner_id, username: MOCK_CURRENT_USER.username, role: "power_user" },
+        candidates: [{ id: "pu-2", username: "pu_not_a_member_yet", role: "power_user" }],
+      });
+    });
+    await page.route(`${API}/projects/${PROJECT.id}/members`, (route) => json(route, []));
+    await page.route(`${API}/projects/${PROJECT.id}/owner`, (route) =>
+      json(route, { ...PROJECT, owner_id: "pu-2" }),
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Manage collaborators" }).click();
+    await page.getByLabel("Reassign owner to").selectOption("pu-2");
+    await page.getByRole("button", { name: "Confirm reassign" }).click();
+
+    await expect(
+      page.getByText("Oak Street Site's owner was changed to pu_not_a_member_yet."),
+    ).toBeVisible();
+    await expect(page.getByText("Unknown")).not.toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Manage collaborators" })).not.toBeVisible();
+  });
 });
 
 test.describe("project workspace as admin", () => {

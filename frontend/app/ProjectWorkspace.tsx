@@ -665,10 +665,23 @@ export default function ProjectWorkspace() {
         setProjects(projects.map((item) => (item.id === updated.id ? updated : item)));
         if (selectedProject?.id === updated.id) setSelectedProject(updated);
         setMessage(`${project.name}'s owner was changed to ${reassignTarget.username}.`);
-        setManageCollaboratorsProject(updated);
         setReassignCandidateId("");
         setReassignTarget(null);
-        await loadCollaboratorLists(updated);
+        if (currentUser.role === "admin" || currentUser.id === updated.owner_id) {
+          setManageCollaboratorsProject(updated);
+          await loadCollaboratorLists(updated);
+        } else {
+          // The caller just gave their own project away: require_project_owner
+          // now rejects them on every "Manage collaborators" endpoint (they're
+          // no longer the owner and aren't an admin), so refetching here would
+          // 403 and the panel's fallback would wrongly show "Owner: Unknown"
+          // instead of the reassignment that just succeeded. Close the panel
+          // instead -- there's nothing left here for them to manage.
+          setManageCollaboratorsProject(null);
+          setExistingCollaborators([]);
+          setOwnerUsername(null);
+          setCollaboratorCandidates([]);
+        }
       } else {
         const body = await response.json().catch(() => null);
         setMessage(errorMessage(body, "Could not change the project owner."));
